@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,viewport-fit=cover"
+    />
+    <title>星宿演武 · 舰队试验场</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #04090f;
+      }
+      canvas {
+        width: 100vw;
+        height: 100vh;
+        display: block;
+        touch-action: none;
+        outline: none;
+      }
+      #safe-area {
+        position: fixed;
+        visibility: hidden;
+        pointer-events: none;
+        padding: env(safe-area-inset-top) env(safe-area-inset-right)
+          env(safe-area-inset-bottom) env(safe-area-inset-left);
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="game" tabindex="0" aria-label="星宿演武舰队试验场"></canvas>
+    <div id="safe-area"></div>
+    <script src="miniprogram/core/ships.js"></script>
+    <script src="miniprogram/core/navigation.js"></script>
+    <script src="miniprogram/core/combat.js"></script>
+    <script src="miniprogram/core/battle-renderer.js"></script>
+    <script src="miniprogram/core/battle-audio.js"></script>
+    <script src="miniprogram/core/game-ui.js"></script>
+    <script src="miniprogram/core/refit-weapon-art.js"></script>
+    <script src="miniprogram/core/refit-screen.js"></script>
+    <script>
+      "use strict";
+      const canvas = document.getElementById("game");
+      const pools = Object.create(null),
+        lastSound = Object.create(null);
+      const names = [
+        "ui",
+        "kinetic",
+        "missile",
+        "plasma",
+        "explosion",
+        "victory",
+        "shield",
+        "thrust",
+        "strafe",
+        "vent",
+        "system",
+        "beam",
+        "impact_metal",
+        "impact_shield",
+        "impact_heavy",
+        "impact_beam",
+        "impact_beam_shield",
+        "impact_plasma",
+        "cannon_medium",
+        "cannon_heavy",
+        "impact_solid",
+      ];
+      const durations = {
+        ui: 90,
+        kinetic: 160,
+        missile: 300,
+        plasma: 240,
+        explosion: 1200,
+        victory: 720,
+        shield: 240,
+        thrust: 300,
+        strafe: 140,
+        vent: 550,
+        system: 380,
+        beam: 180,
+        impact_metal: 280,
+        impact_shield: 320,
+        impact_heavy: 580,
+        impact_beam: 240,
+        impact_beam_shield: 240,
+        impact_plasma: 300,
+        cannon_medium: 320,
+        cannon_heavy: 550,
+        impact_solid: 420,
+      };
+      const soundVariants = Object.create(null);
+      const variedSounds = [
+        "kinetic",
+        "cannon_medium",
+        "cannon_heavy",
+        "impact_metal",
+        "impact_solid",
+        "impact_heavy",
+      ];
+      let duckUntil = 0;
+      const beamLoops = StarBattleAudio.createLoops((name) => {
+        const voice = new Audio("miniprogram/assets/audio/" + name + ".wav");
+        voice.stop = () => {
+          voice.pause();
+          voice.currentTime = 0;
+        };
+        return voice;
+      });
+      function syncLoops(requests, dt) {
+        try {
+          beamLoops.sync(requests, dt, performance.now() < duckUntil ? 0.4 : 1);
+        } catch (_) {
+          /* Audio failure must not stop combat. */
+        }
+      }
+      function stopLoops() {
+        try {
+          beamLoops.stop();
+        } catch (_) {
+          /* Optional audio backend. */
+        }
+      }
+      function playSound(name, volume = 1, options = {}) {
+        try {
+          if (!names.includes(name) || volume < 0.008) return;
+          const now = performance.now();
+          if (
+            now - (lastSound[name] == null ? -Infinity : lastSound[name]) <
+            (name === "ui" ? 35 : 65)
+          )
+            return;
+          const all = Object.values(pools).flat();
+          let active = all.filter((v) => v.until > now).length;
+          const priority = name.startsWith("impact_");
+          // Keep four channels available for contact; steal only lower-priority audio.
+          if (!priority && active >= 8) return;
+          if (active >= 12) {
+            const victim = all
+              .filter((v) => v.until > now && !v.priority)
+              .sort((a, b) => a.until - b.until)[0];
+            if (!victim) return;
+            victim.audio.pause();
+            victim.until = 0;
+            active--;
+          }
+          const pool = pools[name] || (pools[name] = []);
+          let voice = pool.find((v) => v.until <= now);
+          if (!voice && pool.length >= 3) return;
+          if (!voice) {
+            voice = {
+              audio: new Audio("miniprogram/assets/audio/" + name + ".wav"),
+              until: 0,
+            };
+            pool.push(voice);
+          }
+          voice.priority = priority;
+          let filename = name;
+          if (variedSounds.includes(name)) {
+            const variant = soundVariants[name] || 0;
+            soundVariants[name] = (variant + 1) % 3;
+            filename += variant ? "_" + (variant + 1) : "";
+          }
+          if (options.far) filename += "_far";
+          voice.audio.src = "miniprogram/assets/audio/" + filename + ".wav";
+          if (
+            name === "impact_heavy" ||
+            name === "impact_solid" ||
+            name === "explosion"
+          )
+            duckUntil = performance.now() + 160;
+          const overlap = pool.filter((v) => v.until > now).length;
+          voice.audio.volume =
+            (0.9 *
+              Math.max(0, Math.min(1, Number.isFinite(volume) ? volume : 1))) /
+            Math.sqrt(1 + overlap * 0.4 + active * 0.05);
+          voice.audio.currentTime = 0;
+          voice.until = now + durations[name];
+          lastSound[name] = now;
+          const pending = voice.audio.play();
+          if (pending && pending.catch)
+            pending.catch(() => {
+              voice.until = 0;
+            });
+        } catch (_) {
+          /* Audio errors never interrupt simulation. */
+        }
+      }
+      const app = new StarRefit.GameUI({
+        canvas,
+        createImage: () => new Image(),
+        assetRoot: "miniprogram/",
+        playSound,
+        syncLoops,
+        stopLoops,
+        save(value) {
+          try {
+            localStorage.setItem("xingxiu.settings.v2", JSON.stringify(value));
+          } catch (_) {}
+        },
+        load() {
+          try {
+            return JSON.parse(localStorage.getItem("xingxiu.settings.v2"));
+          } catch (_) {
+            return null;
+          }
+        },
+      });
+      function resize() {
+        const style = getComputedStyle(document.getElementById("safe-area"));
+        const n = (key) => parseFloat(style[key]) || 0;
+        app.resize(
+          innerWidth,
+          innerHeight,
+          Math.min(devicePixelRatio || 1, 2),
+          {
+            left: n("paddingLeft"),
+            top: n("paddingTop"),
+            right: innerWidth - n("paddingRight"),
+            bottom: innerHeight - n("paddingBottom"),
+          },
+        );
+      }
+      window.addEventListener("resize", resize);
+      resize();
+      const pointers = new Set(),
+        keys = new Set();
+      function coords(e) {
+        const r = canvas.getBoundingClientRect();
+        return [e.clientX - r.left, e.clientY - r.top];
+      }
+      canvas.addEventListener("pointerdown", (e) => {
+        e.preventDefault();
+        canvas.focus({ preventScroll: true });
+        pointers.add(e.pointerId);
+        try {
+          canvas.setPointerCapture(e.pointerId);
+        } catch (_) {}
+        app.pointerDown(e.pointerId, ...coords(e), e.button, e.pointerType);
+      });
+      canvas.addEventListener("pointermove", (e) =>
+        app.pointerMove(e.pointerId, ...coords(e)),
+      );
+      canvas.addEventListener("pointerup", (e) => {
+        pointers.delete(e.pointerId);
+        app.pointerUp(e.pointerId, ...coords(e));
+        try {
+          canvas.releasePointerCapture(e.pointerId);
+        } catch (_) {}
+      });
+      function cancel(e) {
+        if (pointers.delete(e.pointerId)) app.pointerCancel(e.pointerId);
+      }
+      canvas.addEventListener("pointercancel", cancel);
+      canvas.addEventListener("lostpointercapture", cancel);
+      canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+      // Pointer Events only emits pointerdown for the first held mouse button.
+      // Handle the additional right press without releasing sustained left fire.
+      canvas.addEventListener("mousedown", (e) => {
+        if (
+          e.button === 2 &&
+          e.buttons & 1 &&
+          app.mouseDown &&
+          app.screen === "battle" &&
+          !app.paused &&
+          !app.modal &&
+          app.mode === "manual"
+        )
+          app.pending.shieldToggle = true;
+      });
+      window.addEventListener("mouseup", (e) => {
+        if (e.button === 0) app.mouseDown = false;
+      });
+      canvas.addEventListener(
+        "wheel",
+        (e) => {
+          e.preventDefault();
+          app.wheel(
+            e.deltaY *
+              (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? innerHeight : 1),
+            ...coords(e),
+          );
+        },
+        { passive: false },
+      );
+      const gameKeys = new Set([
+        "c",
+        "w",
+        "a",
+        "s",
+        "d",
+        "q",
+        "e",
+        "f",
+        "v",
+        "r",
+        "g",
+        "1",
+        "2",
+        "3",
+        " ",
+        "shift",
+        "escape",
+        "tab",
+        "arrowup",
+        "arrowdown",
+        "arrowleft",
+        "arrowright",
+      ]);
+      window.addEventListener("keydown", (e) => {
+        if (gameKeys.has(e.key.toLowerCase())) e.preventDefault();
+        if (!keys.has(e.key)) {
+          keys.add(e.key);
+          app.keyDown(e.key);
+        }
+      });
+      window.addEventListener("keyup", (e) => {
+        keys.delete(e.key);
+        app.keyUp(e.key);
+      });
+      function suspend() {
+        pointers.forEach((id) => {
+          app.pointerCancel(id);
+          try {
+            canvas.releasePointerCapture(id);
+          } catch (_) {}
+        });
+        pointers.clear();
+        keys.forEach((key) => app.keyUp(key));
+        keys.clear();
+        app.suspend();
+        Object.values(pools)
+          .flat()
+          .forEach((v) => {
+            try {
+              v.audio.pause();
+              v.audio.currentTime = 0;
+            } catch (_) {}
+            v.until = 0;
+          });
+      }
+      window.addEventListener("blur", suspend);
+      window.addEventListener("pagehide", suspend);
+      let last = 0;
+      document.addEventListener("visibilitychange", () => {
+        last = 0;
+        if (document.hidden) suspend();
+      });
+      function frame(t) {
+        if (!document.hidden)
+          app.frame(last ? Math.min((t - last) / 1000, 0.05) : 0);
+        last = t;
+        requestAnimationFrame(frame);
+      }
+      requestAnimationFrame(frame);
+      window.arena = app;
+    </script>
+  </body>
+</html>
