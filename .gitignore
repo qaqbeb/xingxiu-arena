@@ -1,0 +1,4 @@
+node_modules/
+work/
+project.private.config.json
+.DS_Store
