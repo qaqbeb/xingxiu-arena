@@ -3,8 +3,9 @@ require("./core/ships");
 require("./core/navigation");
 require("./core/combat");
 require("./core/battle-renderer");
-const { GameUI } = require("./core/refit-screen");
+const { GameUI } = require("./core/campaign-screen");
 const battleAudio = require("./core/battle-audio");
+const soundEngine = require("./core/sound-engine");
 const canvas = wx.createCanvas();
 const pools = Object.create(null);
 const lastSound = Object.create(null);
@@ -144,13 +145,67 @@ function playSound(name, volume = 1, options = {}) {
     /* Audio is optional. */
   }
 }
+// Audio and the later hulls live in subpackages so the main package stays
+// small. Without subpackage support everything is already in place.
+const packs = typeof wx.loadSubpackage === "function";
+function loadPack(name, done) {
+  if (!packs) return done(true);
+  try {
+    wx.loadSubpackage({
+      name,
+      success: () => done(true),
+      fail: () => done(false),
+    });
+  } catch (_) {
+    done(false);
+  }
+}
+// Web Audio engine when the base library has one; InnerAudioContext stays as fallback.
+let engine = null;
+function startEngine() {
+  try {
+    if (wx.createWebAudioContext && wx.getFileSystemManager) {
+      const files = wx.getFileSystemManager();
+      engine = soundEngine.create(
+        wx.createWebAudioContext(),
+        (path) =>
+          new Promise((resolve, reject) =>
+            files.readFile({
+              filePath: path,
+              success: (r) => resolve(r.data),
+              fail: reject,
+            }),
+          ),
+      );
+    }
+  } catch (_) {
+    engine = null;
+  }
+}
+// The engine decodes from both audio folders, so wait for both.
+loadPack("sfx", () => loadPack("audio", startEngine));
 const game = new GameUI({
   canvas,
   createImage: () => wx.createImage(),
   assetRoot: "",
-  playSound,
-  syncLoops,
-  stopLoops,
+  deferPacks: packs,
+  playSound(name, volume, options) {
+    if (engine && engine.has(name)) engine.play(name, volume, options);
+    else playSound(name, volume, options);
+  },
+  syncLoops(requests, dt) {
+    if (engine && engine.has("beam_loop")) engine.syncLoops(requests, dt);
+    else syncLoops(requests, dt);
+  },
+  stopLoops() {
+    if (engine) engine.stopLoops();
+    stopLoops();
+  },
+  vibrate(strong) {
+    try {
+      if (wx.vibrateShort) wx.vibrateShort({ type: strong ? "heavy" : "light" });
+    } catch (_) {}
+  },
   save(value) {
     try {
       wx.setStorageSync("xingxiu.settings.v2", value);
@@ -180,6 +235,8 @@ function resize() {
     game.menuRect = null;
   }
 }
+if (packs) loadPack("ships2", (ok) => ok && game.loadPack("ships2"));
+if (packs) loadPack("weapons", (ok) => ok && game.loadPack("weapons"));
 resize();
 if (wx.onWindowResize) wx.onWindowResize(resize);
 const touches = new Set();
@@ -330,6 +387,7 @@ function suspend() {
   keys.forEach((key) => game.keyUp(key));
   keys.clear();
   game.suspend();
+  if (engine) engine.suspend();
   Object.values(pools)
     .flat()
     .forEach((v) => {
@@ -348,6 +406,7 @@ if (wx.onShow)
   wx.onShow(() => {
     hidden = false;
     last = Date.now();
+    if (engine) engine.resume();
     resize();
   });
 function frame() {

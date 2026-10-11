@@ -38,14 +38,18 @@
   <body>
     <canvas id="game" tabindex="0" aria-label="星宿演武舰队试验场"></canvas>
     <div id="safe-area"></div>
+    <script src="miniprogram/core/ship-geometry.js"></script>
     <script src="miniprogram/core/ships.js"></script>
     <script src="miniprogram/core/navigation.js"></script>
     <script src="miniprogram/core/combat.js"></script>
     <script src="miniprogram/core/battle-renderer.js"></script>
     <script src="miniprogram/core/battle-audio.js"></script>
+    <script src="miniprogram/core/sound-engine.js"></script>
     <script src="miniprogram/core/game-ui.js"></script>
     <script src="miniprogram/core/refit-weapon-art.js"></script>
     <script src="miniprogram/core/refit-screen.js"></script>
+    <script src="miniprogram/core/campaign.js"></script>
+    <script src="miniprogram/core/campaign-screen.js"></script>
     <script>
       "use strict";
       const canvas = document.getElementById("game");
@@ -194,13 +198,41 @@
           /* Audio errors never interrupt simulation. */
         }
       }
-      const app = new StarRefit.GameUI({
+      // Web Audio engine when the browser has one; media elements stay as fallback.
+      let engine = null;
+      try {
+        const Context = window.AudioContext || window.webkitAudioContext;
+        if (Context)
+          engine = StarSoundEngine.create(new Context(), (path) =>
+            fetch("miniprogram/" + path).then((r) => {
+              if (!r.ok) throw new Error(path);
+              return r.arrayBuffer();
+            }),
+          );
+      } catch (_) {
+        engine = null;
+      }
+      const app = new StarCampaignUI.GameUI({
         canvas,
         createImage: () => new Image(),
         assetRoot: "miniprogram/",
-        playSound,
-        syncLoops,
-        stopLoops,
+        playSound(name, volume, options) {
+          if (engine && engine.has(name)) engine.play(name, volume, options);
+          else playSound(name, volume, options);
+        },
+        syncLoops(requests, dt) {
+          if (engine && engine.has("beam_loop")) engine.syncLoops(requests, dt);
+          else syncLoops(requests, dt);
+        },
+        stopLoops() {
+          if (engine) engine.stopLoops();
+          stopLoops();
+        },
+        vibrate(strong) {
+          try {
+            if (navigator.vibrate) navigator.vibrate(strong ? 40 : 15);
+          } catch (_) {}
+        },
         save(value) {
           try {
             localStorage.setItem("xingxiu.settings.v2", JSON.stringify(value));
@@ -240,6 +272,7 @@
       canvas.addEventListener("pointerdown", (e) => {
         e.preventDefault();
         canvas.focus({ preventScroll: true });
+        if (engine) engine.resume();
         pointers.add(e.pointerId);
         try {
           canvas.setPointerCapture(e.pointerId);
@@ -337,6 +370,7 @@
         keys.forEach((key) => app.keyUp(key));
         keys.clear();
         app.suspend();
+        if (engine) engine.suspend();
         Object.values(pools)
           .flat()
           .forEach((v) => {

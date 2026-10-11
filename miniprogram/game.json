@@ -1,1 +1,22 @@
-{"deviceOrientation":"landscape","showStatusBar":false}
+{
+  "deviceOrientation": "landscape",
+  "showStatusBar": false,
+  "subpackages": [
+    {
+      "name": "sfx",
+      "root": "assets/sfx/"
+    },
+    {
+      "name": "audio",
+      "root": "assets/audio/"
+    },
+    {
+      "name": "ships2",
+      "root": "assets/ships2/"
+    },
+    {
+      "name": "weapons",
+      "root": "assets/weapons/"
+    }
+  ]
+}

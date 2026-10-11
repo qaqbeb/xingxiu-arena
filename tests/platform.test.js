@@ -143,6 +143,12 @@ function nativeFixture() {
     filename: entry,
   });
   const ui = scope.GameGlobal.arena;
+  // The game now opens on the title menu; these adapter tests exercise the
+  // skirmish flow, so enter it the way the "自由演武" button does.
+  assert.equal(ui.screen, "menu");
+  ui.setScreen("hangar");
+  labels.length = 0;
+  ui.draw();
   function frame(ms = 20) {
     now += ms;
     labels.length = 0;
@@ -523,7 +529,7 @@ test("browser reserves impact voices and admits a heavy strike in a busy mix", (
   );
   const code = html.slice(
     html.indexOf('"use strict";'),
-    html.search(/const app = new (?:StarArena|StarRefit)\.GameUI/),
+    html.search(/const app = new (?:StarArena|StarRefit|StarCampaignUI)\.GameUI/),
   );
   const voices = [];
   let now = 10000;
