@@ -31,6 +31,8 @@ test("catalog retains the four reference acceleration and turn baselines", () =>
     xie: [30, 20, 10, 12, 12],
   };
   for (const d of Catalog.SHIPS) {
+    assert.equal(C.validateLoadout(d.id).ok, true, d.id + " default fit");
+    if (!expected[d.id]) continue; // hulls added after the four references
     const m = d.movement;
     assert.deepEqual(
       [
@@ -310,7 +312,7 @@ test("friendly hulls block a projectile without friendly damage", () => {
   assert.equal(enemy.hp, enemy.maxHp);
 });
 test("seeded AI battles finish by exhaustion and valid fleet budget includes reserves", () => {
-  assert.throws(() => C.createBattle(["xie", "xie", "xie"], ["xia"]), /预算/);
+  assert.throws(() => C.createBattle(["fuyue", "fuyue", "fuyue"], ["xia"]), /预算/);
   const a = C.createBattle(["xia", "tian"], ["shen", "xia"], 19, {
       deferred: false,
     }),
@@ -474,7 +476,8 @@ test("thrust reflects acceleration, braking and turning without erasing momentum
   assert.ok(p.thrust.turn > 0);
   assert.ok(p.vx > 0 && p.vx < vx);
   for (const d of Catalog.SHIPS) {
-    assert.ok(d.engineSlots.length >= 3);
+    // ART-BRIEF-SHIPS permits two nozzles on the Xinyue frigate.
+    assert.ok(d.engineSlots.length >= (d.id === "xinyue" ? 2 : 3));
     assert.ok(
       d.engineSlots.every(
         (e) =>

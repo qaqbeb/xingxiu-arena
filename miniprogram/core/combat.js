@@ -87,9 +87,9 @@
         ids.reduce(
           (v, id) => v + (C.getShip(id) || { cost: Infinity }).cost,
           0,
-        ) > 60
+        ) > 100
       )
-        throw Error("编队超过 60 预算");
+        throw Error("编队超过 100 预算");
       ids.forEach((id, i) => {
         const d = C.getShip(id),
           iid = team + "-" + i,
@@ -816,28 +816,38 @@
           m.beamEvent = s.time;
         }
       } else {
-        s.projectiles.push({
-          id: ++s.projectileSeq,
-          x,
-          y,
-          px: x,
-          py: y,
-          angle: m.aimAngle,
-          team: p.team,
-          kind: w.mode,
-          damageType: w.damageType,
-          color: w.color,
-          sourceId: p.id,
-          weaponId: w.id,
-          damage: w.damage,
-          speed: w.speed,
-          life: w.fuel || w.range / w.speed,
-          remaining: w.mode === "missile" ? w.speed * w.fuel : w.range,
-          hp: w.hp || 1,
-          targetId: target && !missile ? target.id : null,
-          pd: !!w.pd,
-          turnRate: (w.turnRate || 0) * R,
-        });
+        // A salvo leaves the launcher as a fan; odd rounds fly a touch slower
+        // so the volley arrives staggered instead of as one blob.
+        const rounds = w.salvo || 1;
+        for (let round = 0; round < rounds; round++)
+          s.projectiles.push({
+            id: ++s.projectileSeq,
+            x,
+            y,
+            px: x,
+            py: y,
+            angle:
+              m.aimAngle +
+              (rounds > 1
+                ? (round / (rounds - 1) - 0.5) * (w.spread || 0) * R
+                : 0),
+            team: p.team,
+            kind: w.mode,
+            damageType: w.damageType,
+            color: w.color,
+            sourceId: p.id,
+            weaponId: w.id,
+            damage: w.damage,
+            speed: w.speed * (round % 2 ? 0.93 : 1),
+            life: w.fuel || w.range / w.speed,
+            remaining: w.mode === "missile" ? w.speed * w.fuel : w.range,
+            hp: w.hp || 1,
+            targetId: target && !missile ? target.id : null,
+            pd: !!w.pd,
+            turnRate: (w.turnRate || 0) * R,
+            mirv: w.mirv || null,
+            sprint: w.sprint || null,
+          });
         m.cooldown = w.cooldown;
         if (m.ammo !== null) m.ammo--;
         event(s, "shot", p, w.name, w.id, {
@@ -853,6 +863,7 @@
     }
   }
   function advanceProjectiles(s, dt) {
+    const spawned = [];
     for (const b of s.projectiles) {
       if (b.life <= 0) continue;
       b.px = b.x;
@@ -879,6 +890,55 @@
                 b.turnRate * dt,
               ),
           );
+        if (t) {
+          const bearing = Math.atan2(t.y - b.y, t.x - b.x),
+            distance = Math.hypot(t.x - b.x, t.y - b.y) - (t.radius || 0);
+          if (b.mirv && distance < b.mirv.range) {
+            // The bus dies here; its warheads fan out and home on their own.
+            for (let i = 0; i < b.mirv.count; i++)
+              spawned.push({
+                id: ++s.projectileSeq,
+                x: b.x,
+                y: b.y,
+                px: b.x,
+                py: b.y,
+                angle:
+                  bearing +
+                  (i / (b.mirv.count - 1 || 1) - 0.5) * b.mirv.spread * R,
+                team: b.team,
+                kind: "missile",
+                damageType: b.damageType,
+                color: b.color,
+                sourceId: b.sourceId,
+                weaponId: b.weaponId,
+                damage: b.mirv.damage,
+                speed: b.mirv.speed * (i % 2 ? 0.92 : 1),
+                life: 2.4,
+                remaining: Infinity,
+                hp: 30,
+                targetId: t.id,
+                pd: false,
+                turnRate: 150 * R,
+                child: true,
+              });
+            b.life = 0;
+            event(s, "split", null, "分导", b.weaponId, { x: b.x, y: b.y });
+            continue;
+          }
+          if (
+            b.sprint &&
+            !b.sprinting &&
+            distance < b.sprint.range &&
+            Math.abs(wrap(bearing - b.angle)) < 0.3
+          ) {
+            // Final dash: no more steering, far too fast for point defence.
+            b.sprinting = true;
+            b.angle = bearing;
+            b.speed = b.sprint.speed;
+            b.turnRate = 0;
+            b.life = Math.max(b.life, 1);
+          }
+        }
       }
       const travel =
         b.kind === "missile"
@@ -957,7 +1017,7 @@
       }
       if (b.kind !== "missile" && b.remaining <= 0) b.life = 0;
     }
-    s.projectiles = s.projectiles.filter((b) => b.life > 0);
+    s.projectiles = s.projectiles.filter((b) => b.life > 0).concat(spawned);
   }
   function resolveShips(s) {
     const active = s.ships.filter((p) => p.status === "active");
