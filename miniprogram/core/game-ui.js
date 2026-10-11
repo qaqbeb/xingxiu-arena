@@ -124,13 +124,9 @@
           }
         } catch (e) {}
         this.selected = this.fleets[0][0];
+        // Hulls shipped in a subpackage wait until the adapter reports it loaded.
         catalog.SHIPS.forEach((s) => {
-          const img = platform.createImage();
-          img.onload = () => {
-            this.images[s.id] = img;
-          };
-          img.onerror = () => this.assetErrors.push(s.id);
-          img.src = platform.assetRoot + s.asset;
+          if (!s.pack || !platform.deferPacks) this.loadShipImage(s);
         });
         const background = platform.createImage();
         background.onload = () => {
@@ -151,6 +147,21 @@
             a: 0.12 + (i % 5) * 0.09,
           });
         }
+      }
+
+      loadShipImage(s) {
+        const img = this.p.createImage();
+        img.onload = () => {
+          this.images[s.id] = img;
+        };
+        img.onerror = () => this.assetErrors.push(s.id);
+        img.src = this.p.assetRoot + s.asset;
+      }
+      // Called by the adapter once a subpackage is on disk.
+      loadPack(name) {
+        catalog.SHIPS.filter((s) => s.pack === name).forEach((s) =>
+          this.loadShipImage(s),
+        );
       }
 
       // ── resize ───────────────────────────────────────────────────
@@ -197,9 +208,9 @@
         if (this.screen === "battle")
           nav.setCameraFocus(
             this.camera,
-            this.topHudHidden ? 0 : 53,
+            this.topHudHidden ? 0 : 44,
             this.viewport.h -
-              (this.bottomHudHidden ? 58 : this.mode === "manual" ? 148 : 106),
+              (this.bottomHudHidden ? 20 : this.mode === "manual" ? 74 : 56),
           );
         else nav.setCameraFocus(this.camera);
         if (isMap) nav.setCameraMode(this.camera, "overview");
@@ -312,6 +323,7 @@
       }
       returnToFlagship() {
         this.mouse = null;
+        this.autoZoom = true;
         nav.setCameraMode(this.camera, "follow");
       }
       seekMinimap(button, x, y) {
@@ -623,6 +635,7 @@
 
       wheel(delta, x, y) {
         if (!this.camera || this.screen === "hangar" || this.modal) return;
+        this.autoZoom = false;
         nav.zoomCamera(
           this.camera,
           delta > 0 ? 0.88 : 1.14,
@@ -755,6 +768,7 @@
       prepare(training = false) {
         try {
           this.training = training;
+          this.autoZoom = true;
           this.battle = combat.createBattle(
             this.fleets[0],
             training ? ["xie"] : this.fleets[1],
@@ -1060,6 +1074,48 @@
         return result;
       }
 
+      // Follow view breathes with the fight: tight on the hull while cruising,
+      // easing out just far enough to keep the nearest enemy in frame.
+      updateAutoZoom(dt) {
+        const cam = this.camera,
+          own = this.flagship();
+        if (
+          this.autoZoom === false ||
+          cam.mode !== "follow" ||
+          this.paused ||
+          !this.battle ||
+          !own ||
+          !active(own)
+        )
+          return;
+        // A capital ship fills the screen at frigate zoom; pull back by size.
+        const cruise = clamp(190 / (own.length || 100), 0.62, 1);
+        let want = cruise,
+          best = Infinity;
+        for (const s of this.battle.ships) {
+          if (s.team === own.team || !active(s)) continue;
+          const dx = s.x - own.x,
+            dy = s.y - own.y,
+            d = Math.hypot(dx, dy);
+          if (d >= best) continue;
+          best = d;
+          const span =
+              (cam.focusBottom || cam.height) - (cam.focusTop || 0),
+            room =
+              (Math.abs(dx) / (d || 1)) * cam.width * 0.44 +
+              (Math.abs(dy) / (d || 1)) * span * 0.66;
+          want =
+            d < 1150
+              ? Math.min(
+                  cruise * 1.15,
+                  clamp(room / Math.max(d, 1) / cam.baseScale, 0.6, 1.15),
+                )
+              : cruise;
+        }
+        cam.zoom += (want - cam.zoom) * (1 - Math.exp(-1.6 * dt));
+        cam.scale = cam.baseScale * cam.zoom;
+      }
+
       // ── frame loop ───────────────────────────────────────────────
       frame(dt) {
         if (!this.width) return;
@@ -1076,7 +1132,11 @@
           !this.paused &&
           !this.modal
         ) {
-          this.acc += dt * this.speed;
+          // Hit-stop slows the simulation clock only; the step size and
+          // therefore the battle outcome are untouched.
+          const stopped = this.hitStop > 0 && this.speed === 1;
+          if (this.hitStop > 0) this.hitStop = Math.max(0, this.hitStop - dt);
+          this.acc += dt * this.speed * (stopped ? 0.12 : 1);
           let first = true;
           const cmd = this.mode === "manual" ? this.command() : null;
           while (this.acc >= 1 / 60) {
@@ -1176,7 +1236,19 @@
                             ? "cannon_medium"
                             : "kinetic",
                   0.52 * location.gain,
-                  { far: location.far },
+                  {
+                    far: location.far,
+                    pan: location.pan,
+                    // One recording per family; pitch separates the calibres.
+                    pitch:
+                      weapon && weapon.type === "energy"
+                        ? clamp(1.25 - weapon.damage / 700, 0.6, 1.2)
+                        : weapon && weapon.type === "missile"
+                          ? clamp(1.2 - weapon.damage / 2500, 0.65, 1.2)
+                          : weapon && weapon.pd
+                            ? 1.25
+                            : 1,
+                  },
                 );
               }
               if (e.type === "hit") {
@@ -1204,12 +1276,13 @@
                           : e.damage >= 200
                             ? "impact_heavy"
                             : "impact_metal";
-                this.play(sound, gain, { far: location.far });
+                this.play(sound, gain, { far: location.far, pan: location.pan });
               }
               if (e.type === "explosion") {
                 const location = audio.spatial(this.camera, e.x, e.y);
-                this.play("explosion", 0.82 * location.gain, {
+                this.play("explosion", 0.95 * location.gain, {
                   far: location.far,
+                  pan: location.pan,
                 });
               }
               if (e.type === "overload") this.play("shield", 0.4);
@@ -1221,6 +1294,7 @@
           if (cmd && Math.hypot(cmd.moveX, cmd.moveY) > 0.2)
             this.play("thrust", 0.12);
         }
+        if (this.camera && this.screen === "battle") this.updateAutoZoom(dt);
         if (this.camera && this.screen === "battle")
           nav.updateCamera(
             this.camera,
@@ -1493,7 +1567,9 @@
         this.buttons = [];
 
         if (this.screen === "hangar") this.drawHangar();
-        else if (this.battle) {
+        else if (this.drawScreen && this.drawScreen()) {
+          // Screens owned by a subclass (menu, star map, port).
+        } else if (this.battle) {
           this.drawSpace();
           this.drawBattleWorld();
           if (this.screen === "deploy" || this.screen === "tactical")
@@ -1731,9 +1807,36 @@
         // ── ship catalog cards: bottom row, or under the hero panel in compact ──
         const cardsY = this.compact ? heroY + heroH + 8 : h - 114;
         const cardH = this.compact ? clamp(h - cardsY - 6, 64, 96) : 96;
-        const cardW = (lw - 21) / 4;
-        catalog.SHIPS.forEach((a, i) => {
-          const x = pad + i * (cardW + 7);
+        // Four hulls per page, lightest class first; arrows flip the page.
+        const ORDER = ["护卫", "驱逐", "巡洋", "主力"];
+        const roster = catalog.SHIPS.slice().sort(
+          (a, b) => ORDER.indexOf(a.hullClass) - ORDER.indexOf(b.hullClass),
+        );
+        const pages = Math.ceil(roster.length / 4);
+        if (this.catalogPage === undefined)
+          this.catalogPage = Math.floor(
+            Math.max(0, roster.findIndex((a) => a.id === s.id)) / 4,
+          );
+        this.catalogPage = clamp(this.catalogPage, 0, pages - 1);
+        const arrowW = pages > 1 ? 30 : 0;
+        const cardW = (lw - 21 - 2 * arrowW - (arrowW ? 14 : 0)) / 4;
+        if (pages > 1) {
+          this.button("‹", pad, cardsY, arrowW, cardH, () => this.catalogPage--, {
+            disabled: this.catalogPage === 0,
+            size: 18,
+          });
+          this.button(
+            "›",
+            pad + lw - arrowW,
+            cardsY,
+            arrowW,
+            cardH,
+            () => this.catalogPage++,
+            { disabled: this.catalogPage >= pages - 1, size: 18 },
+          );
+        }
+        roster.slice(this.catalogPage * 4, this.catalogPage * 4 + 4).forEach((a, i) => {
+          const x = pad + (arrowW ? arrowW + 7 : 0) + i * (cardW + 7);
           this.chamferRect(
             x,
             cardsY,
@@ -1758,7 +1861,7 @@
             C.text,
           );
           this.mono(
-            a.cost + " DP",
+            a.hullClass + " " + a.cost + " DP",
             x + cardW - 9,
             cardsY + cardH * 0.9,
             9,
@@ -1881,7 +1984,7 @@
             C.muted,
           );
           this.mono(
-            fleetCost + " / 60 DP",
+            fleetCost + " / " + nav.BUDGET + " DP",
             rx + rw - 3,
             budgetY,
             12,
@@ -1932,7 +2035,7 @@
         // CTA button – final fleet deploy
         const ctaY = btnY + btnH + btnGap;
         this.button(
-          this.compact ? "部署舰队 " + fleetCost + "/60 →" : "进入战场  →",
+          this.compact ? "部署舰队 " + fleetCost + "/" + nav.BUDGET + " →" : "进入战场  →",
           rx,
           ctaY,
           rw,
@@ -2052,7 +2155,7 @@
           this.mode === "manual"
         ) {
           const p = this.toScreen(ship.x, ship.y);
-          const r = Math.max(34, ship.length * scale * 0.7);
+          const r = Math.max(34, ship.length * scale * 0.7, this.gaugeRadius(ship) + 12);
 
           // convergence check
           const converged = this._turretsConverged(ship);
@@ -2093,6 +2196,8 @@
             C.blue + "a0",
           );
         }
+        if (ship && active(ship) && this.screen === "battle" && !this.topHudHidden)
+          this.drawFlagshipGauge(ship);
         c.restore();
 
         // flash timer decay
@@ -2136,14 +2241,14 @@
           if (
             p.x > v.x + 18 &&
             p.x < v.x + v.w - 18 &&
-            p.y > v.y + 55 &&
-            p.y < v.y + v.h - 150
+            p.y > v.y + 44 &&
+            p.y < v.y + v.h - 70
           )
             continue;
           const col = s.team ? C.red : C.mint,
             x = clamp(p.x, v.x + 20, v.x + v.w - 20),
-            minY = v.y + 65,
-            maxY = Math.max(minY, v.y + v.h - 165);
+            minY = v.y + 98,
+            maxY = Math.max(minY, v.y + v.h - 96);
           let y = clamp(p.y, minY, maxY);
           const slots = [];
           for (let row = minY; row <= maxY; row += 18) slots.push(row);
@@ -2240,92 +2345,74 @@
           ship = this.flagship(),
           battle = this.battle;
 
-        // ── top bar 44px ──
-        const topH = 44;
-        const top = safe.top;
-        const btnW = this.compact ? 62 : 82;
+        // ── slim top row: clock and three compact buttons, no backing strip ──
+        const topH = 34;
+        const top = safe.top + 6;
+        const btnW = this.compact ? 54 : 70;
         const gap = 6;
-        const start = this.headerRight(14) - 4 * btnW - 3 * gap;
+        const start = this.headerRight(12) - 3 * btnW - 2 * gap;
 
         if (!this.topHudHidden) {
-          this.rect(safe.left, safe.top, safe.right - safe.left, topH, "#07131ad9");
-
-          const titleEnd = this.headerText(
-            this.training ? "武备试炼场" : "星宿演武",
-            safe.left + 17,
-            safe.top + 24,
-            17,
-            C.text,
-            start - safe.left - 33,
-            600,
-          );
-          if (start - titleEnd > 86)
-            this.mono(
-              fmt(battle.time),
-              titleEnd + 18,
-              safe.top + 26,
-              14,
-              C.mint,
-            );
+          this.mono(fmt(battle.time), safe.left + 14, safe.top + 21, 13, C.mint);
+          if (this.training)
+            this.text("武备试炼场", safe.left + 62, safe.top + 20, 11, C.muted);
 
           this.button(
             this.mode === "manual" ? "手操" : "AI观战",
             start,
-            top + 1,
+            top,
             btnW,
-            topH - 2,
+            topH,
             () => this.toggleMode(),
-            { active: this.mode === "manual", size: 12 },
+            { active: this.mode === "manual", size: 11 },
           );
           this.button(
             "战术图",
             start + btnW + gap,
-            top + 1,
+            top,
             btnW,
-            topH - 2,
+            topH,
             () => this.openTactical(),
-            { size: 12 },
-          );
-          this.button(
-            this.paused ? "继续" : "暂停",
-            start + 2 * (btnW + gap),
-            top + 1,
-            btnW,
-            topH - 2,
-            () => this.openTactical(),  // unified: pause → tactical
-            { active: this.paused, size: 12 },
+            { size: 11 },
           );
           this.button(
             "整备",
-            start + 3 * (btnW + gap),
-            top + 1,
+            start + 2 * (btnW + gap),
+            top,
             btnW,
-            topH - 2,
+            topH,
             () => {
               this.paused = true;
               this.setScreen("hangar");
             },
-            { size: 12 },
+            { size: 11 },
           );
 
           this.drawMinimap();
-          this.button(
-            "−",
-            safe.right - 98,
-            safe.top + this.minimapH + 72,
-            42,
-            38,
-            () => nav.zoomCamera(this.camera, 0.8),
-            { size: 20 },
-          );
+          const zx = safe.right - (this.compact ? 96 : 132) - 12 - 38;
           this.button(
             "＋",
-            safe.right - 50,
-            safe.top + this.minimapH + 72,
-            42,
-            38,
-            () => nav.zoomCamera(this.camera, 1.25),
-            { size: 18 },
+            zx,
+            safe.top + 48,
+            32,
+            28,
+            () => {
+              this.autoZoom = false;
+              nav.zoomCamera(this.camera, 1.25);
+            },
+            { size: 15 },
+          );
+          this.button(
+            "−",
+            zx,
+            safe.top + 80,
+            32,
+            28,
+            () => {
+              this.autoZoom = false;
+              nav.zoomCamera(this.camera, 0.8);
+            },
+            { size: 17 },
           );
         }
 
@@ -2340,215 +2427,144 @@
           this.button(
             "回到旗舰",
             safe.left + 12,
-            safe.top + (this.topHudHidden ? 50 : topH + 46),
+            safe.top + (this.topHudHidden ? 50 : 100),
             88,
-            38,
+            34,
             () => this.returnToFlagship(),
             { size: 11, role: "recenter" },
           );
         if (ship && active(ship)) {
-          const def = catalog.getShip(ship.typeId),
-            bw = Math.min(280, w * 0.32),
-            bx = w / 2 - bw / 2,
-            by = safe.bottom - 95;
+          const def = catalog.getShip(ship.typeId);
 
-          if (!this.bottomHudHidden) {
-            // status panel with chamfer
-            this.chamferRect(bx - 12, by - 9, bw + 24, 97, "#081720df", C.line, 6);
-
-            this.text(
-              def.name + " / " + (this.mode === "manual" ? "旗舰" : "跟随"),
-              bx,
-              by + 8,
-              14,
-              C.text,
-              "left",
-              500,
-            );
-            this.mono(
-              Math.round(Math.hypot(ship.vx, ship.vy)) + " u/s",
-              bx + bw,
-              by + 8,
-              11,
-              C.muted,
-              "right",
-            );
-
-            // structure bar
-            this.text("结构", bx, by + 32, 10, C.muted);
-            this.bar(bx + 36, by + 30, bw - 36, ship.hp / ship.maxHp, C.mint, 5);
-
-            // ── flux gauge 10px ──
-            const flux = (ship.hardFlux + ship.softFlux) / ship.maxFlux;
-            this.text("幅能", bx, by + 50, 10, C.muted);
-            const gaugeY = by + 47;
-            const gaugeH = 10;
-            const gaugeW = bw - 36;
-            // background
-            this.rect(bx + 36, gaugeY, gaugeW, gaugeH, "#253543");
-            // soft flux overlay
-            this.rect(bx + 36, gaugeY, gaugeW * clamp(flux, 0, 1), gaugeH, "#9a815c");
-            // hard flux overlay (hard flux on top)
-            this.rect(bx + 36, gaugeY, gaugeW * clamp(ship.hardFlux / ship.maxFlux, 0, 1), gaugeH, C.gold);
-            // >80% red pulse
-            if (flux > 0.8) {
-              const pulse = Math.sin(this.clock * 8) > 0;
-              if (pulse) {
-                this.rect(bx + 36, gaugeY, gaugeW, gaugeH, C.red + "33");
-              }
-            }
-            this.mono(
-              Math.round(flux * 100) + "%",
-              bx + bw,
-              by + 65,
-              10,
-              flux > 0.8 ? C.red : C.gold,
-              "right",
-            );
-
-            // ── armor segmented blocks ──
-            for (let i = 0; i < 6; i++) {
-              const val = ship.armor[i] / ship.maxArmor[i];
-              const ax = bx + i * 18;
-              const ay = by + 66;
-              this.rect(ax, ay, 14, 8,
-                val > 0.65 ? "#8aaa9c" : val > 0.1 ? "#b78b51" : "#9f4842",
-              );
-            }
-            this.text("局部装甲", bx + 114, by + 71, 9, C.muted);
-          }
 
           if (this.mode === "manual") {
-            const ghostZones = this.stickZones();
             this.drawJoystick("left", "推进");
             this.drawJoystick("right", "瞄准");
 
-            // weapon group chips – below top bar, centered
-            const gy = safe.top + 50;
-            const gw = Math.min(360, bw);
-            const gx = (this.width - gw) / 2;
-            for (let i = 0; i < 3; i++) {
-              const x = gx + i * (gw / 3);
-              this.chamferRect(
-                x,
-                gy,
-                gw / 3 - 4,
-                32,
-                this.manualGroup === i ? "#193942" : "#0a1b27",
-                this.manualGroup === i ? C.mint : C.line,
-                4,
-              );
-              this.text(
-                ["主炮", "副炮", "防御"][i],
-                x + gw * 0.09,
-                gy + 15,
-                11,
-                C.text,
-                "center",
-              );
-              this.hit(x, gy, gw / 3 * 0.51, 32, () => (this.manualGroup = i));
-              this.text(
-                ship.autoGroups[i] ? "自动" : "手动",
-                x + gw / 3 * 0.74,
-                gy + 15,
-                10,
-                ship.autoGroups[i] ? C.mint : C.gold,
-                "center",
-              );
-              this.hit(x + gw / 3 * 0.51, gy, gw / 3 * 0.49 - 4, 32, () =>
-                this.toggleAuto(i),
-              );
-            }
-
-            const padW = 64;
-            const padH = 56;
-            const padGap = 14;
-            const rx = safe.right - padW - 16;
+            // Controls sit in one bottom row between the two thumbs so that
+            // nothing covers the engagement or the floating stick areas.
+            const zones = this.stickZones();
+            const pad = this.compact ? 50 : 58;
+            const rowY = safe.bottom - pad - 12;
+            const padGap = 8;
             const hasSystem = ship.typeId === "xie";
+            const rightEdge = zones.right.x - zones.right.r - 14;
+            const shieldX = rightEdge - pad;
+            const ventX = shieldX - padGap - pad;
 
             this.button(
+              ship.shieldOn ? "护盾 开" : "护盾 关",
+              shieldX,
+              rowY,
+              pad,
+              pad,
+              () => (this.pending.shieldToggle = true),
+              { active: ship.shieldOn, size: 11 },
+            );
+            this.button(
               ship.venting > 0 ? "散幅中" : "长按散幅",
-              rx,
-              safe.bottom - padH - 16,
-              padW,
-              padH,
+              ventX,
+              rowY,
+              pad,
+              pad,
               () => {},
               {
                 role: "vent",
                 color: ship.venting > 0 ? C.blue : C.text,
-                size: 11,
+                size: 10,
               },
             );
-
-            // 护盾
-            this.button(
-              ship.shieldOn ? "护盾 开" : "护盾 关",
-              rx,
-              safe.bottom - padH * 2 - padGap - 16,
-              padW,
-              padH,
-              () => (this.pending.shieldToggle = true),
-              { active: ship.shieldOn, size: 12 },
-            );
-
-            // 玄甲阵 (top, only for xie)
             if (hasSystem) {
               this.button(
                 ship.systemCooldown > 0
                   ? Math.ceil(ship.systemCooldown) + "s"
                   : "玄甲阵",
-                rx,
-                safe.bottom - padH * 3 - padGap * 2 - 16,
-                padW,
-                padH,
+                shieldX,
+                rowY - padGap - pad,
+                pad,
+                pad,
                 () => (this.pending.system = true),
-                { active: ship.systemTime > 0, color: C.gold, size: 12 },
+                { active: ship.systemTime > 0, color: C.gold, size: 11 },
               );
             }
 
-            const brakeX = safe.left + (this.compact ? 165 : 187);
-            this.button("制动", brakeX, safe.bottom - padH - 16, padW, padH, () => {}, {
+            const brakeX = zones.left.x + zones.left.r + 14;
+            this.button("制动", brakeX, rowY, pad, pad, () => {}, {
               role: "brake",
               active: this.braking,
-              size: 12,
+              size: 11,
             });
+
+            // weapon group chips – bottom centre, between brake and vent
+            const free = ventX - padGap - (brakeX + pad + padGap);
+            const gw = clamp(free, 150, 264);
+            const gx = brakeX + pad + padGap + (free - gw) / 2;
+            const gh = 36;
+            const gy = safe.bottom - gh - 12;
+            for (let i = 0; i < 3; i++) {
+              const x = gx + i * (gw / 3);
+              const cw = gw / 3 - 4;
+              const on = this.manualGroup === i;
+              this.chamferRect(
+                x,
+                gy,
+                cw,
+                gh,
+                on ? "#193942cc" : "#0a1b2799",
+                on ? C.mint : C.line,
+                4,
+              );
+              this.text(
+                ["主炮", "副炮", "防御"][i],
+                x + cw / 2,
+                gy + 13,
+                11,
+                on ? C.text : C.muted,
+                "center",
+                on ? 600 : 400,
+              );
+              this.text(
+                ship.autoGroups[i] ? "自动" : "手动",
+                x + cw / 2,
+                gy + 27,
+                9,
+                ship.autoGroups[i] ? C.mint : C.gold,
+                "center",
+              );
+              this.hit(x, gy, cw * 0.5, gh, () => (this.manualGroup = i));
+              this.hit(x + cw * 0.5, gy, cw * 0.5, gh, () =>
+                this.toggleAuto(i),
+              );
+            }
 
             if (this.training && !this.topHudHidden)
               this.text(
                 "舰艏线 / 金色期望朝向 / 蓝色速度矢量",
-                safe.left + 112,
-                safe.top + topH + 16,
-                11,
+                safe.left + 14,
+                safe.top + 96,
+                10,
                 C.muted,
               );
           } else {
             // spectate mode
             this.button(
               this.speed + "× 速度",
-              safe.left + 16,
-              safe.bottom - 59,
-              90,
-              44,
+              safe.left + 14,
+              safe.bottom - 52,
+              78,
+              40,
               () => (this.speed = this.speed === 1 ? 2 : 1),
-              { size: 13 },
+              { size: 12 },
             );
             this.button(
               "跟随旗舰",
-              safe.left + 114,
-              safe.bottom - 59,
-              92,
-              44,
-              () => nav.setCameraMode(this.camera, "follow"),
+              safe.left + 98,
+              safe.bottom - 52,
+              84,
+              40,
+              () => this.returnToFlagship(),
               { size: 12 },
             );
-            if (!this.bottomHudHidden)
-              this.text(
-                "拖动观察 · 滚轮缩放 · 点击舰船跟随",
-                safe.left + 17,
-                safe.bottom - 79,
-                11,
-                C.muted,
-              );
           }
         }
 
@@ -2559,20 +2575,75 @@
         if (last && !this.topHudHidden)
           this.text(
             last.text,
-            safe.left + 17,
-            safe.top + this.minimapH + 93,
+            (safe.left + safe.right) / 2,
+            safe.top + 58,
             11,
             last.type === "explosion" ? C.red : C.gold,
+            "center",
           );
 
         if (battle.status === "finished") this.drawResults();
       }
 
+      // Flagship gauges live on the hull itself, so the pilot never looks away
+      // from the fight: structure on the left arc, flux on the right arc, and
+      // the six armour sectors as a thin ring that turns with the ship.
+      drawFlagshipGauge(ship) {
+        const c = this.ctx,
+          p = this.toScreen(ship.x, ship.y),
+          R = this.gaugeRadius(ship),
+          span = Math.PI * 0.62,
+          hp = clamp(ship.hp / ship.maxHp, 0, 1),
+          hard = clamp(ship.hardFlux / ship.maxFlux, 0, 1),
+          flux = clamp((ship.hardFlux + ship.softFlux) / ship.maxFlux, 0, 1),
+          arc = (from, to, color, width, anti) => {
+            c.beginPath();
+            c.arc(p.x, p.y, R, from, to, !!anti);
+            c.strokeStyle = color;
+            c.lineWidth = width;
+            c.stroke();
+          };
+        c.save();
+        c.lineCap = "butt";
+        // structure: fills upward along the left side
+        const left = Math.PI - span / 2 + span;
+        arc(left - span, left, "#0b161dcc", 6);
+        arc(left - span, left, "#2a3b47", 4);
+        if (hp > 0)
+          arc(left, left - span * hp, hp > 0.35 ? C.mint : C.red, 4, true);
+        // flux: fills upward along the right side, hard flux drawn over soft
+        const right = span / 2;
+        arc(right - span, right, "#0b161dcc", 6);
+        arc(right - span, right, "#2a3b47", 4);
+        if (flux > 0) arc(right, right - span * flux, "#9a815c", 4, true);
+        if (hard > 0) arc(right, right - span * hard, C.gold, 4, true);
+        if (flux > 0.8 && Math.sin(this.clock * 9) > 0)
+          arc(right - span, right, C.red + "aa", 4);
+        // armour: sector 0 faces the bow; only worn plates draw attention
+        for (let i = 0; i < 6; i++) {
+          const val = ship.armor[i] / ship.maxArmor[i],
+            mid = ship.angle + (i * Math.PI) / 3;
+          c.beginPath();
+          c.arc(p.x, p.y, R - 8, mid - 0.44, mid + 0.44);
+          c.strokeStyle =
+            val > 0.65 ? "#8aaa9c55" : val > 0.1 ? "#d6a35c" : "#d2564c";
+          c.lineWidth = val > 0.65 ? 1.5 : 2.5;
+          c.stroke();
+        }
+        c.restore();
+        // Colour and position carry the meaning; words appear only as a warning.
+        if (flux > 0.8)
+          this.text("幅能告急", p.x, p.y - R - 9, 10, C.red, "center", 600);
+      }
+      gaugeRadius(ship) {
+        return Math.max(38, ship.radius * this.camera.scale + 18);
+      }
+
       drawMinimap() {
-        const sw = this.compact ? 116 : 168,
+        const sw = this.compact ? 96 : 132,
           sh = (sw * 3000) / 4800,
           x = this.safe.right - sw - 12,
-          y = this.safe.top + 62;
+          y = this.safe.top + 48;
         this.minimapH = sh;
         this.rect(x, y, sw, sh, "#091a249e", "#314a53");
         for (const s of this.battle.ships.filter(active)) {

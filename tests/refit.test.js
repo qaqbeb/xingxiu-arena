@@ -106,38 +106,44 @@ function click(ui, role, id) {
   ui.draw();
 }
 
-test("all 14 physical slots expose only compatible weapons and preview does not save", () => {
-  const { ui, writes } = fixture();
+test("every physical slot lists only compatible weapons and one tap fits the chosen one", () => {
+  const { ui } = fixture();
   let count = 0;
   for (const ship of catalog.SHIPS) {
-    ui.fleets[0] = [ship.id]; ui.slot = 0; ui.refit();
+    ui.fleets[0] = [ship.id]; ui.slot = 0; ui.loadouts = {}; ui.refit();
     for (const m of ship.mounts) {
       click(ui, "refit-slot", m.id);
       assert.equal(ui.refitState.mountId, m.id);
-      assert.equal(ui.refitState.candidateId, m.defaultWeapon);
+      assert.equal(ui.refitWeapon(m).id, m.defaultWeapon);
+      const compatible = catalog.WEAPONS.filter((w) => w.type === m.type && w.size === m.size);
       const options = ui.buttons.filter((b) => b.role === "refit-weapon");
-      assert.equal(options.length, catalog.WEAPONS.filter((w) => w.type === m.type && w.size === m.size).length);
+      assert.equal(options.length, Math.min(4, compatible.length));
+      assert(options.every((o) => compatible.some((w) => w.id === o.weaponId)));
       for (const option of options) {
+        const before = ui.refitWeapon(m).id, affordable = ui.refitAffordable(option.weaponId);
         click(ui, "refit-weapon", option.weaponId);
-        assert.equal(ui.refitState.candidateId, option.weaponId);
-        assert.equal(ui.refitWeapon(m).id, m.defaultWeapon);
+        // A fit that exceeds the ordnance budget is refused and changes nothing.
+        assert.equal(ui.refitWeapon(m).id, affordable ? option.weaponId : before);
+        assert.equal(ui.refitState.candidateId, ui.refitWeapon(m).id);
+        assert(combat.validateLoadout(ship.id, ui.refitState.fit).ok);
       }
+      ui.resetRefit();
       count++;
     }
   }
-  assert.equal(count, 14);
-  assert.equal(writes.length, 0);
-  assert.deepEqual(ui.loadouts, {});
+  assert.equal(count, catalog.SHIPS.reduce((n, s) => n + s.mounts.length, 0));
 });
 
-test("install uses the selected physical slot, persists and reaches real battle loadouts", () => {
+test("a tap fits the selected physical slot, persists and reaches real battle loadouts", () => {
   const { ui, writes } = fixture(); ui.refit();
   click(ui, "refit-slot", "b2");
-  click(ui, "refit-weapon", "suixing");
   assert.equal(writes.length, 0);
-  click(ui, "refit-install");
+  click(ui, "refit-weapon", "suixing");
   assert.equal(ui.loadouts["0-0"].weapons.b2, "suixing");
   assert.equal(ui.loadouts["0-0"].weapons.b1, undefined);
+  assert.equal(writes.length, 1);
+  // Tapping the weapon that is already fitted is not a change.
+  click(ui, "refit-weapon", "suixing");
   assert.equal(writes.length, 1);
   assert.equal(ui.fitCost(catalog.getShip("xia"), ui.loadouts["0-0"]), 12);
   click(ui, "refit-close");
@@ -166,7 +172,6 @@ test("OP exhaustion blocks more expensive replacement and flux increases without
   assert.deepEqual(ui.loadouts, before);
   assert.equal(writes.length, saves);
   ui.draw();
-  assert(!ui.buttons.some((b) => b.role === "refit-install"));
   assert(!ui.buttons.some((b) => b.role === "refit-flux-plus"));
   assert(ui.changeFlux("vents", -1));
   assert(ui.installRefitWeapon());
@@ -218,7 +223,10 @@ test("desktop and mobile render every hull; touch callouts and actions stay insi
         for (const b of ui.buttons) {
           assert(b.x >= ui.safe.left && b.y >= ui.safe.top, b.role + " escaped top/left");
           assert(b.x+b.w <= ui.safe.right+0.001 && b.y+b.h <= ui.safe.bottom+0.001, b.role + " escaped right/bottom at " + w+"x"+h);
-          if (b.role === "refit-slot") assert(b.h >= 44 && b.w >= 44);
+// Slot rows stay finger-sized on phones and up; only sub-640 px
+          // screens showing a many-mount hull fall back to thin rows plus hull pins.
+          if (b.role === "refit-slot") assert(b.w >= 44 && b.h >= (w < 640 ? 10 : 30), d.id + " slot " + b.w + "×" + b.h + " at " + w + "x" + h);
+          if (b.role === "refit-weapon") assert(b.h >= 39 && b.w >= 200, d.id + " weapon row " + b.h + " at " + w + "x" + h);
           if (b.y < 45) assert(b.x+b.w <= ui.headerRight()+0.001, b.role + " under native capsule");
         }
         const slots = ui.buttons.filter((b) => b.role === "refit-slot");
@@ -243,19 +251,22 @@ test("incomplete but valid saved refits are normalized; invalid saved fitting is
   assert.equal(writes.length,0);
 });
 
-test("weapon comparison text stays above install actions at intermediate and short heights", () => {
+test("weapon rows and their text stay inside the picker, clear of the footer, at every size", () => {
   for (const [w,h] of [[1280,720],[1024,650],[1024,600],[1024,550],[844,390],[740,360],[568,320]]) {
     const {ui}=fixture(undefined,w,h);
     ui.resize(w,h,1,{left:20,top:0,right:w-20,bottom:h-10});
-    ui.refit(); ui.previewRefitWeapon("suixing");
-    const drawn=[];
-    ui.refitText=(value,x,y,size=13)=>drawn.push({value:String(value),x,y,size});
-    const l=ui.refitLayout();
-    ui.drawRefitLibrary(l,ui.refitDefinition());
-    const actionY=l.bottom-44;
-    for (const t of drawn) {
-      if (Math.abs(t.y-(actionY+22))<0.001) continue; // Status and button label.
-      assert(t.y+t.size/2 <= actionY, 'detail overlaps actions at '+w+'x'+h+': '+t.value);
+    for (const id of ["xia","kangjin"]) {
+      ui.fleets[0]=[id]; ui.slot=0; ui.refit();
+      const l=ui.refitLayout(), drawn=[];
+      const text=ui.refitText.bind(ui);
+      ui.refitText=(value,x,y,size=13,...rest)=>{ drawn.push({value:String(value),x,y,size}); return text(value,x,y,size,...rest); };
+      ui.buttons=[];
+      ui.drawRefitLibrary(l,ui.refitDefinition());
+      const rows=ui.buttons.filter((b)=>b.role==="refit-weapon");
+      assert(rows.length>=1);
+      for (const r of rows) assert(r.y>=l.picker.y && r.y+r.h<=l.picker.y+l.picker.h+0.001, 'row leaves picker at '+w+'x'+h);
+      for (let i=1;i<rows.length;i++) assert(rows[i].y>=rows[i-1].y+rows[i-1].h, 'rows overlap at '+w+'x'+h);
+      for (const t of drawn) assert(t.y+t.size/2<=l.footer.y+0.001 && t.x>=l.picker.x-0.001, 'text escapes picker at '+w+'x'+h+': '+t.value);
     }
   }
 });

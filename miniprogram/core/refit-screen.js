@@ -19,10 +19,29 @@
     fuling: "长射程连续光束，适合维持对护盾的压力。",
     zhaoyao: "近程点防御光束，优先处理来袭导弹。",
     zhuihun: "有限弹药的制导武器，适合在护盾破绽时发射。",
+    poyue: "短射程小型破甲炮。贴近后撕开装甲，对护盾乏力。",
+    liexing: "高射速动能机炮，持续压垮护盾并逼出硬幅能。",
+    tiansan: "中型防空霰阵，拦截导弹的覆盖面远大于小型点防。",
+    guanri: "超远程动能弩炮，弹速极快，专门击穿护盾。",
+    bailei: "三联速射重炮，持续破甲输出高，幅能压力也大。",
+    leiting: "蓄能重脉冲。单发极痛，但一轮齐射就占掉大半幅能。",
+    yingguang: "轻型能量弹，对盾对甲都不吃亏的通用小炮。",
+    dingshen: "低耗远程牵制光束，逼对手举盾积攒幅能。",
+    pojun: "仅三发的无制导重雷。命中装甲即重创，易被点防拦截。",
+    liuxing: "高速小火矢齐射，弹药充足，用数量耗穿点防。",
   };
   const EFFECT = { kinetic: "护盾 ×2   装甲 ×0.5", he: "护盾 ×0.5   装甲 ×2", energy: "护盾 ×1   装甲 ×1", frag: "护盾 ×0.25   装甲 ×0.25" };
+  // Colour carries meaning on this screen: mount type, damage type, and the
+  // three figures a player compares (damage, flux, range) each keep one hue.
+  const TYPE_COLOR = { ballistic: "#d9a868", energy: "#a8a2ff", missile: "#ff8d76" };
+  const DAMAGE_COLOR = { kinetic: "#f2d06b", he: "#ff9360", energy: "#a8a2ff", frag: "#9fb0b5" };
+  const TECH_COLOR = { 低科技: "#d9a868", 中科技: "#8fd8cf", 高科技: "#b9b0ff" };
+  const STAT = { damage: "#f4d28a", flux: "#b3a4ff", range: "#8cdec6", ammo: "#ffb37a", vent: "#8cdec6" };
   const copy = (v) => JSON.parse(JSON.stringify(v));
-  const rate = (w, key) => w.mode === "beam" ? w[key] : w[key] / w.cooldown;
+  // Per-second figures. One trigger of a salvo or MIRV weapon delivers every
+  // round it carries, so damage counts them all.
+  const volley = (w) => (w.mirv ? w.mirv.count * w.mirv.damage : w.damage) * (w.salvo || 1);
+  const rate = (w, key) => w.mode === "beam" ? w[key] : (key === "damage" ? volley(w) : w[key]) / w.cooldown;
   const number = (n) => Math.round(n).toLocaleString("en-US");
 
   class GameUI extends base.GameUI {
@@ -117,7 +136,7 @@
       if (this.keys[k]) return;
       this.keys[k] = true;
       if (k === "escape") this.closeRefit();
-      else if (/^[1-4]$/.test(k)) {
+      else if (/^[1-9]$/.test(k)) {
         const m = this.refitDefinition().mounts[Number(k) - 1];
         if (m) this.selectRefitMount(m.id);
       } else if (k === "enter") this.installRefitWeapon();
@@ -127,16 +146,70 @@
       if (!this.refitState) this.refit();
       this.drawRefit();
     }
+    // ── weapon art ───────────────────────────────────────────────────
+    // Painted icons live in the "weapons" subpackage; until one has loaded the
+    // hand-drawn miniature stands in, so the screen never shows an empty box.
+    loadWeaponImages() {
+      if (this.weaponImages) return;
+      this.weaponImages = {};
+      for (const w of catalog.WEAPONS) {
+        const img = this.p.createImage();
+        img.onload = () => { this.weaponImages[w.id] = img; };
+        img.onerror = () => {};
+        img.src = this.p.assetRoot + "assets/weapons/" + w.id + ".png";
+      }
+    }
+    loadPack(name) {
+      super.loadPack(name);
+      if (name === "weapons") { this.weaponPack = true; this.loadWeaponImages(); }
+    }
+    weaponArt(weapon, x, y, w, h) {
+      if (!this.weaponImages && (!this.p.deferPacks || this.weaponPack)) this.loadWeaponImages();
+      const img = this.weaponImages && this.weaponImages[weapon.id];
+      if (!img) return art.draw(this.ctx, weapon, x, y, w, h);
+      const size = Math.min(w, h);
+      this.ctx.drawImage(img, x + (w - size) / 2, y + (h - size) / 2, size, size);
+      return true;
+    }
+
+    // ── fit summary ──────────────────────────────────────────────────
+    refitStats() {
+      const d = this.refitDefinition(), fit = this.refitState.fit, used = this.fitCost(d, fit);
+      let weaponFlux = 0;
+      for (const m of d.mounts) weaponFlux += rate(this.refitWeapon(m), "flux");
+      const dissipation = d.fluxDissipation + (fit.vents || 0) * 10, capacity = d.fluxCapacity + (fit.capacitors || 0) * 200;
+      return { used, remain: d.op - used, upgrades: (fit.vents || 0) + (fit.capacitors || 0), weaponFlux, upkeep: d.shieldUpkeep, dissipation, capacity };
+    }
+    // One tap fits the weapon. A refused fit leaves the mount as it was and says why.
+    chooseRefitWeapon(id) {
+      const mount = this.refitMount(), current = this.refitWeapon(mount).id;
+      if (id === current || !this.previewRefitWeapon(id)) return false;
+      const done = this.installRefitWeapon();
+      if (!done) this.refitState.candidateId = current;
+      return done;
+    }
+    refitAffordable(id) {
+      const draft = copy(this.refitState.fit);
+      draft.weapons[this.refitState.mountId] = id;
+      return combat.validateLoadout(this.fitType, draft).ok;
+    }
+
+    // ── layout ───────────────────────────────────────────────────────
     refitLayout() {
-      const s = this.safe, short = s.bottom - s.top < 540;
-      const pad = short ? 14 : 28;
-      const left = s.left + pad, right = s.right - pad;
-      const top = s.top + (short ? 58 : 92);
-      const bottom = s.bottom - (short ? 80 : 126);
-      const split = left + (right - left) * (short ? 0.46 : 0.53);
-      return { short, pad, left, right, top, bottom, split, footer: bottom + 12,
-        stage: { x: left, y: top, w: split - left - 18, h: bottom - top },
-        library: { x: split + 16, y: top, w: right - split - 16, h: bottom - top } };
+      const s = this.safe, W = s.right - s.left, H = s.bottom - s.top, short = H < 540, narrow = W < 640;
+      const pad = short ? 10 : 20, head = short ? 50 : 64, foot = short ? 66 : 88;
+      const left = s.left + pad, right = s.right - pad, top = s.top + head, bottom = s.bottom - foot - (short ? 4 : 10);
+      const inner = right - left, gap = short ? 8 : 14;
+      // Hulls with many mounts get a two-column slot list so rows stay tappable.
+      const many = !narrow && this.refitDefinition().mounts.length > 6;
+      const slotsW = Math.round(many ? Math.max(232, Math.min(300, inner * 0.3)) : Math.max(narrow ? 118 : 148, Math.min(230, inner * 0.2)));
+      const pickerW = Math.round(Math.max(narrow ? 236 : 300, Math.min(560, inner * 0.42)));
+      const stageW = inner - slotsW - pickerW - gap * 2;
+      return { short, narrow, many, pad, left, right, top, bottom, head, foot, gap,
+        slots: { x: left, y: top, w: slotsW, h: bottom - top },
+        stage: { x: left + slotsW + gap, y: top, w: stageW, h: bottom - top },
+        picker: { x: right - pickerW, y: top, w: pickerW, h: bottom - top },
+        footer: { x: left, y: bottom + (short ? 4 : 10), w: inner, h: foot } };
     }
     refitText(t, x, y, size = 13, color = P.text, align = "left", weight = 400, width) {
       const c = this.ctx;
@@ -151,221 +224,236 @@
       c.fillStyle = color; c.textAlign = align; c.textBaseline = "middle";
       c.fillText(String(t), x, y); c.restore();
     }
+    refitWidth(t, size, weight = 400) {
+      const c = this.ctx;
+      c.save();
+      c.font = weight + " " + size + 'px -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif';
+      const w = c.measureText(String(t)).width;
+      c.restore();
+      return w;
+    }
     refitButton(label, x, y, w, h, fn, opts = {}) {
       const disabled = !!opts.disabled;
       const hover = this.mouse && this.mouse.x >= x && this.mouse.x <= x + w && this.mouse.y >= y && this.mouse.y <= y + h;
-      this.rect(x, y, w, h, disabled ? "#172025" : opts.primary ? P.accent : hover ? "#263138" : "#1b252b", disabled ? P.line : opts.primary ? null : "#47534f");
+      this.rect(x, y, w, h, disabled ? "#141b20" : opts.primary ? P.accent : hover ? "#2a363d" : "#1c262c", disabled ? "#222c31" : opts.primary ? null : "#3d4a4f");
       this.refitText(label, x + w / 2, y + h / 2, opts.size || 13, disabled ? P.dim : opts.primary ? "#202117" : P.text, "center", opts.primary ? 600 : 400);
       if (!disabled) this.hit(x, y, w, h, fn, { role: opts.role || "refit-action", ...opts });
     }
+    // Draws "label value" pairs left to right, the value in its own colour, and
+    // stops before running past the right edge.
+    refitFacts(facts, x, y, right, size) {
+      for (const [label, value, color] of facts) {
+        const lw = label ? this.refitWidth(label + " ", size) : 0, vw = this.refitWidth(value, size, 600);
+        if (x + lw + vw > right) break;
+        if (label) this.refitText(label, x, y, size, P.muted);
+        this.refitText(value, x + lw, y, size, color, "left", 600);
+        x += lw + vw + size * 1.1;
+      }
+      return x;
+    }
+
+    // ── drawing ──────────────────────────────────────────────────────
     drawRefit() {
       const c = this.ctx, l = this.refitLayout(), d = this.refitDefinition();
       this.buttons = [];
       c.save();
       this.rect(0, 0, this.width, this.height, P.bg);
-      const shade = c.createLinearGradient(0, 0, this.width, this.height);
-      shade.addColorStop(0, "#1b252b"); shade.addColorStop(0.6, "#0c1217"); shade.addColorStop(1, "#11191d");
+      const shade = c.createLinearGradient(0, 0, 0, this.height);
+      shade.addColorStop(0, "#141c22"); shade.addColorStop(1, "#090d11");
       this.rect(0, 0, this.width, this.height, shade);
-      this.line(l.left, l.top - 9, l.right, l.top - 9, P.line);
-      const titleY = this.safe.top + (l.short ? 27 : 37);
-      this.refitText("舰船整备", l.left, titleY, l.short ? 19 : 24, P.text, "left", 600);
-      this.refitText((this.team === 0 ? "己方" : "对手") + "舰队  /  " + String(this.slot + 1).padStart(2, "0"), l.left + (l.short ? 108 : 136), titleY, 12, P.muted);
-      const headerRight = Math.min(l.right, this.headerRight());
-      this.refitButton("完成整备  ›", headerRight - 116, this.safe.top + 6, 116, 44, () => this.closeRefit(), { role: "refit-close" });
-      if (!l.short) this.refitText("选择舰体炮位，检视并安装武器", l.left, titleY + 28, 12, P.muted);
-      this.line(l.split, l.top + 4, l.split, l.bottom, P.line);
+      this.drawRefitHeader(l, d);
+      this.drawRefitSlots(l, d);
       this.drawRefitShip(l, d);
       this.drawRefitLibrary(l, d);
       this.drawRefitEngineering(l, d);
+      this.drawRefitMenu();
       c.restore();
+    }
+    drawRefitHeader(l, d) {
+      const top = this.safe.top + (l.short ? 3 : 10), right = Math.min(l.right, this.headerRight()), state = this.refitState;
+      this.refitButton("‹ 完成", l.left, top, 76, 44, () => this.closeRefit(), { role: "refit-close", primary: true, size: 13 });
+      let x = l.left + 88;
+      const several = this.fleets[this.team].length > 1, wide = right - l.left >= 520;
+      // right-hand controls, laid out from the edge inwards
+      let rx = right;
+      const place = (w) => { rx -= w; const at = rx; rx -= 6; return at; };
+      if (wide) {
+        this.refitButton("标准", place(58), top, 58, 44, () => this.resetRefit(), { role: "refit-reset", size: 12 });
+        this.refitButton("撤销", place(58), top, 58, 44, () => this.undoRefit(), { role: "refit-undo", disabled: !state.history.length, size: 12 });
+      } else {
+        const mx = place(44);
+        this.refitButton("···", mx, top, 44, 44, () => { state.more = !state.more; }, { role: "refit-more", size: 18 });
+      }
+      if (several) {
+        this.refitButton("›", place(44), top, 44, 44, () => this.nextRefitShip(1), { role: "refit-next-ship", size: 20 });
+        this.refitButton("‹", place(44), top, 44, 44, () => this.nextRefitShip(-1), { role: "refit-previous-ship", size: 20 });
+      }
+      const room = rx - x;
+      this.refitText(d.name, x, top + (l.short ? 15 : 16), l.short ? 19 : 22, P.text, "left", 600, room);
+      this.refitText((d.hullClass ? d.hullClass + "舰 · " : "") + d.className + " · " + d.tech + (several ? "   " + (this.slot + 1) + "/" + this.fleets[this.team].length : ""), x, top + (l.short ? 35 : 38), 11, TECH_COLOR[d.tech] || P.muted, "left", 400, room);
+      this.line(l.left, l.top - 5, l.right, l.top - 5, P.line);
+      this.refitMenu = !wide && state.more ? { x: Math.max(l.left, right - 214), y: top + 48 } : null;
+    }
+    // Drawn after every panel so its buttons sit on top of what it covers.
+    drawRefitMenu() {
+      const m = this.refitMenu, state = this.refitState;
+      if (!m) return;
+      this.rect(m.x, m.y, 214, 60, "#11191e", P.accent);
+      this.refitButton("撤销上一步", m.x + 7, m.y + 8, 96, 44, () => { this.undoRefit(); state.more = false; }, { role: "refit-undo", disabled: !state.history.length, size: 11 });
+      this.refitButton("恢复标准", m.x + 111, m.y + 8, 96, 44, () => { this.resetRefit(); state.more = false; }, { role: "refit-reset", size: 11 });
+    }
+    // Every mount as one row: the list is the primary way to pick a slot, so a
+    // capital ship's twelve mounts stay as easy to hit as a frigate's three.
+    drawRefitSlots(l, d) {
+      let a = l.slots;
+      const mount = this.refitMount(), n = d.mounts.length;
+      const titleH = l.short ? 18 : 24;
+      this.refitText("炮位", a.x, a.y + titleH / 2 - 1, 11, P.muted, "left", 600);
+      this.refitText(n + " 个", a.x + a.w, a.y + titleH / 2 - 1, 10, P.dim, "right");
+      const cols = l.many ? 2 : 1, rows = Math.ceil(n / cols), colW = (a.w - (cols - 1) * 4) / cols;
+      const step = Math.min(l.short ? 46 : 54, (a.h - titleH) / rows), rowH = step - 3, slim = rowH < 34 || cols > 1;
+      d.mounts.forEach((m, i) => {
+        const y = a.y + titleH + (i % rows) * step, active = m.id === mount.id, w = this.refitWeapon(m), color = TYPE_COLOR[m.type];
+        const a0 = a;
+        a = { x: a0.x + Math.floor(i / rows) * (colW + 4), w: colW };
+        this.rect(a.x, y, a.w, rowH, active ? "#2b2a20" : "#131b20", active ? P.accent : "#232e34");
+        this.rect(a.x, y, 3, rowH, color);
+        const icon = Math.min(rowH - 4, 34);
+        this.weaponArt(w, a.x + 7, y + (rowH - icon) / 2, icon, icon);
+        const tx = a.x + 12 + icon;
+        if (slim) {
+          this.refitText(String(i + 1).padStart(2, "0"), tx, y + rowH / 2, 10, active ? P.accent : P.dim, "left", 600);
+          this.refitText(w.name, tx + 20, y + rowH / 2, 11, P.text, "left", 400, a.x + a.w - tx - 24);
+        } else {
+          this.refitText(String(i + 1).padStart(2, "0") + " " + SIZE[m.size] + TYPE[m.type], tx, y + rowH / 2 - 8, 10, active ? P.accent : color, "left", 600, a.x + a.w - tx - 4);
+          this.refitText(w.name, tx, y + rowH / 2 + 8, 12, P.text, "left", 400, a.x + a.w - tx - 4);
+        }
+        this.hit(a.x, y, a.w, rowH, () => this.selectRefitMount(m.id), { role: "refit-slot", mountId: m.id });
+        a = a0;
+      });
     }
     drawRefitShip(l, d) {
-      const c = this.ctx, a = l.stage;
-      this.refitText(d.name, a.x, a.y + 13, l.short ? 21 : 30, P.text, "left", 600);
-      this.refitText(d.className + "  ·  " + d.tech, a.x, a.y + (l.short ? 36 : 43), 12, P.muted);
-      const shipSwitchX = a.x + a.w - 92;
-      this.refitButton("‹", shipSwitchX, a.y - 4, 44, 44, () => this.nextRefitShip(-1), { role: "refit-previous-ship", disabled: this.fleets[this.team].length < 2, size: 22 });
-      this.refitButton("›", shipSwitchX + 48, a.y - 4, 44, 44, () => this.nextRefitShip(1), { role: "refit-next-ship", disabled: this.fleets[this.team].length < 2, size: 22 });
-      const head = l.short ? 50 : 66, foot = l.short ? 18 : 56;
-      const cx = a.x + a.w / 2, cy = a.y + head + (a.h - head - foot) / 2;
-      const size = Math.max(70, Math.min(a.w * (l.short ? 0.82 : 0.8), a.h - head - foot + (l.short ? 22 : 12)));
+      const c = this.ctx, a = l.stage, mount = this.refitMount();
+      const foot = l.short ? 16 : 24;
+      const cx = a.x + a.w / 2, cy = a.y + (a.h - foot) / 2;
+      const size = Math.max(60, Math.min(a.w * 1.02, (a.h - foot) * 1.02));
       this.refitShipGeometry = { cx, cy, size };
-      c.save(); c.beginPath(); c.rect(a.x, a.y + head - 6, a.w, Math.max(1, a.h - head + 6)); c.clip();
-      const glow = c.createRadialGradient(cx, cy, size * 0.1, cx, cy, size * 0.68);
-      glow.addColorStop(0, "#30404780"); glow.addColorStop(1, "#17212900");
-      this.rect(a.x, a.y + head - 6, a.w, a.h, glow);
-      // Drafting marks are restrained and stationary; the hull stays the visual focus.
-      this.line(cx, a.y + head, cx, a.y + a.h - foot + 10, "#2b393c");
-      this.line(a.x + 12, cy, a.x + a.w - 12, cy, "#243034");
-      this.circle(cx, cy, size * 0.49, "#273539", null);
-      for (let i = -4; i <= 4; i++) {
-        const ty = cy + i * size / 9;
-        this.line(cx - size * 0.51, ty, cx - size * 0.51 + (i % 2 ? 4 : 9), ty, "#526065");
-      }
-      const mount = this.refitMount();
-      const pos = (m) => ({ x: cx + m.y * size / (d.length * (d.spriteScale || 1.04)), y: cy - m.x * size / (d.length * (d.spriteScale || 1.04)) });
-      const selected = pos(mount), rad = Math.PI / 180, angle = (mount.angle - 90) * rad;
-      const radius = size * 0.59;
+      const unit = size / (d.length * (d.spriteScale || 1.04)), rad = Math.PI / 180;
+      const pos = (m) => ({ x: cx + m.y * unit, y: cy - m.x * unit });
+      c.save(); c.beginPath(); c.rect(a.x, a.y, a.w, a.h); c.clip();
+      const glow = c.createRadialGradient(cx, cy, size * 0.1, cx, cy, size * 0.62);
+      glow.addColorStop(0, "#2b3a4270"); glow.addColorStop(1, "#17212900");
+      this.rect(a.x, a.y, a.w, a.h, glow);
+      this.circle(cx, cy, size * 0.5, "#222e33", null);
+      // firing arc of the selected mount
+      const selected = pos(mount), angle = (mount.angle - 90) * rad, color = TYPE_COLOR[mount.type];
       c.beginPath(); c.moveTo(selected.x, selected.y);
-      c.arc(selected.x, selected.y, radius, angle - mount.arc * rad / 2, angle + mount.arc * rad / 2);
-      c.closePath(); c.fillStyle = "#c7a66b0d"; c.fill(); c.strokeStyle = "#c7a66b38"; c.lineWidth = 1; c.stroke();
-      c.save(); c.shadowColor = "#000000"; c.shadowBlur = 18; c.shadowOffsetY = 8;
+      c.arc(selected.x, selected.y, size * 0.6, angle - mount.arc * rad / 2, angle + mount.arc * rad / 2);
+      c.closePath(); c.fillStyle = color + "14"; c.fill(); c.strokeStyle = color + "55"; c.lineWidth = 1; c.stroke();
+      c.save(); c.shadowColor = "#000000"; c.shadowBlur = 16; c.shadowOffsetY = 6;
       this.shipImage(d.id, cx, cy, size, -Math.PI / 2); c.restore();
-      d.mounts.forEach((m) => {
-        const p = pos(m), iconSize = Math.max(l.short ? 15 : 21, size * (m.size === "large" ? 0.17 : m.size === "medium" ? 0.105 : 0.075));
-        c.save(); c.translate(p.x, p.y); c.rotate(m.angle * rad);
-        art.draw(c, this.refitWeapon(m), -iconSize / 2, -iconSize / 2, iconSize, iconSize);
-        c.restore();
-      });
       c.restore();
-      // Callouts supplement exact on-hull pins with non-overlapping touch targets.
-      const sides = [[], []];
-      d.mounts.forEach((m, i) => { const side = m.y < -0.1 ? 0 : m.y > 0.1 ? 1 : sides[0].length <= sides[1].length ? 0 : 1; sides[side].push({ m, i }); });
-      const callW = Math.min(l.short ? 86 : 133, a.w * 0.26);
-      for (let side = 0; side < 2; side++) {
-        const items = sides[side].sort((v, w) => w.m.x - v.m.x);
-        items.forEach(({ m, i }, index) => {
-          const p = pos(m), active = m.id === mount.id;
-          const x = side ? a.x + a.w - callW : a.x;
-          const available = Math.max(46, a.h - head - foot);
-          const y = a.y + head + (available - items.length * 46) / 2 + index * (l.short ? 46 : 66) - (!l.short && items.length > 1 ? 10 : 0);
-          const endX = side ? x : x + callW, endY = y + 22;
-          c.save(); c.beginPath(); c.moveTo(p.x, p.y); c.lineTo((p.x + endX) / 2, endY); c.lineTo(endX, endY);
-          c.strokeStyle = active ? P.accent : "#72807a99"; c.lineWidth = 1; c.stroke(); c.restore();
-          this.rect(x, y, callW, 44, active ? "#302d23ed" : "#111a20ee", active ? "#8f794f" : "#334248");
-          this.refitText(String(i + 1).padStart(2, "0") + "  " + SIZE[m.size] + TYPE[m.type], x + 7, y + 12, l.short ? 10 : 11, active ? P.accent : P.muted);
-          this.refitText(this.refitWeapon(m).name, x + 7, y + 30, l.short ? 11 : 13, P.text);
-          this.hit(x, y, callW, 44, () => this.selectRefitMount(m.id), { role: "refit-slot", mountId: m.id });
-          this.circle(p.x, p.y, active ? 13 : 10, active ? P.accent : "#c3cbc5", "#111a20d9", active ? 2 : 1);
-          this.refitText(i + 1, p.x, p.y, 11, active ? P.accent : P.text, "center", 600);
-          this.hit(p.x - 12, p.y - 12, 24, 24, () => this.selectRefitMount(m.id), { role: "refit-pin", mountId: m.id });
-        });
-      }
-      const hintY = a.y + a.h - (l.short ? 4 : 34);
-      this.refitText((mount.hardpoint ? "固定炮" : "旋转炮塔") + "  ·  射界 " + mount.arc + "°  ·  武器组 " + (mount.group + 1), cx, hintY, l.short ? 10 : 12, P.muted, "center");
-      if (!l.short) this.refitText(d.material, cx, hintY + 23, 12, P.dim, "center");
+      d.mounts.forEach((m, i) => {
+        const p = pos(m), active = m.id === mount.id, r = active ? 12 : 8;
+        this.circle(p.x, p.y, r, active ? P.accent : TYPE_COLOR[m.type], active ? "#2b2a20f2" : "#0d1418d9", active ? 2 : 1.3);
+        this.refitText(i + 1, p.x, p.y + 0.5, active ? 11 : 9, active ? P.accent : P.text, "center", 600);
+        this.hit(p.x - 13, p.y - 13, 26, 26, () => this.selectRefitMount(m.id), { role: "refit-pin", mountId: m.id });
+      });
+      this.refitText((mount.hardpoint ? "固定炮位" : "旋转炮塔") + " · 射界 " + mount.arc + "° · 武器组 " + (mount.group + 1), cx, a.y + a.h - foot / 2 + 2, l.short ? 10 : 11, P.muted, "center", 400, a.w);
     }
     drawRefitLibrary(l, d) {
-      const a = l.library, m = this.refitMount(), state = this.refitState;
-      const list = this.refitCompatible(), selected = catalog.getWeapon(state.candidateId), installed = this.refitWeapon(m);
-      const mountNumber = d.mounts.indexOf(m) + 1;
-      this.refitText("炮位 " + String(mountNumber).padStart(2, "0"), a.x, a.y + 10, l.short ? 17 : 22, P.text, "left", 600);
-      this.refitText(SIZE[m.size] + " / " + TYPE[m.type], a.x + (l.short ? 85 : 110), a.y + 11, 12, P.accent);
-      this.refitText(list.length + " 件兼容", a.x + a.w, a.y + 11, 11, P.muted, "right");
-      const rowH = l.short ? 48 : 72, gap = l.short ? 5 : 8, listY = a.y + (l.short ? 30 : 44);
-      const page = state.page || 0, visible = list.slice(page * 2, page * 2 + 2);
+      const a = l.picker, m = this.refitMount(), state = this.refitState;
+      const list = this.refitCompatible(), installed = this.refitWeapon(m), index = d.mounts.indexOf(m) + 1;
+      const headH = l.short ? 22 : 30, noteH = l.short ? 18 : 24;
+      this.refitText("炮位 " + String(index).padStart(2, "0"), a.x, a.y + headH / 2 - 2, l.short ? 14 : 16, P.text, "left", 600);
+      this.refitText(SIZE[m.size] + TYPE[m.type], a.x + (l.short ? 60 : 70), a.y + headH / 2 - 2, 12, TYPE_COLOR[m.type], "left", 600);
+      const per = Math.max(1, Math.min(4, Math.floor((a.h - headH - noteH) / 44)));
+      const pages = Math.max(1, Math.ceil(list.length / per));
+      const page = (state.page = Math.max(0, Math.min(pages - 1, state.page || 0)));
+      if (pages > 1) {
+        this.refitButton("‹", a.x + a.w - 92, a.y, 44, headH - 2, () => { state.page = page - 1; }, { disabled: page === 0, size: 16 });
+        this.refitButton("›", a.x + a.w - 44, a.y, 44, headH - 2, () => { state.page = page + 1; }, { disabled: page >= pages - 1, size: 16 });
+        this.refitText(page + 1 + "/" + pages, a.x + a.w - 100, a.y + headH / 2 - 2, 10, P.dim, "right");
+      } else this.refitText(list.length + " 件可选 · 点选即装", a.x + a.w, a.y + headH / 2 - 2, 10, P.dim, "right");
+      const visible = list.slice(page * per, page * per + per);
+      const step = Math.min(l.short ? 68 : 92, (a.h - headH - noteH) / Math.max(visible.length, l.short ? 3 : 4)), rowH = step - 5;
+      const tall = rowH >= 58;
       visible.forEach((w, i) => {
-        const y = listY + i * (rowH + gap), active = w.id === selected.id, equipped = w.id === installed.id;
-        this.rect(a.x, y, a.w, rowH, active ? "#282a24" : "#162026", active ? "#8c7a57" : "#2e3b41");
-        if (active) this.rect(a.x, y, 3, rowH, P.accent);
-        art.draw(this.ctx, w, a.x + 6, y + 2, l.short ? 56 : 78, rowH - 4, { selected: active });
-        const tx = a.x + (l.short ? 66 : 94);
-        this.refitText(w.name, tx, y + (l.short ? 14 : 23), l.short ? 14 : 17, P.text, "left", 600);
-        this.refitText(DAMAGE[w.damageType] + (w.mode === "beam" ? "光束" : w.type === "missile" ? "导弹" : "弹") + "  ·  射程 " + w.range, tx, y + (l.short ? 33 : 49), l.short ? 10 : 12, P.muted, "left", 400, a.w - (l.short ? 66 : 94) - 64);
-        this.refitText(w.op + " OP", a.x + a.w - 12, y + (l.short ? 14 : 24), l.short ? 13 : 16, active ? P.accent : P.text, "right", 500);
-        this.refitText(equipped ? "已装配" : "可替换", a.x + a.w - 12, y + (l.short ? 33 : 49), l.short ? 10 : 11, equipped ? P.good : P.muted, "right");
-        this.hit(a.x, y, a.w, rowH, () => this.previewRefitWeapon(w.id), { role: "refit-weapon", weaponId: w.id });
+        const y = a.y + headH + i * step, equipped = w.id === installed.id, ok = equipped || this.refitAffordable(w.id);
+        const c = this.ctx;
+        c.save();
+        if (!ok) c.globalAlpha = 0.5;
+        this.rect(a.x, y, a.w, rowH, equipped ? "#26271f" : "#131b20", equipped ? P.accent : "#263238");
+        if (equipped) this.rect(a.x, y, 3, rowH, P.accent);
+        const box = rowH - 8;
+        this.rect(a.x + 6, y + 4, box, box, "#0b1115", "#1e282d");
+        this.weaponArt(w, a.x + 8, y + 6, box - 4, box - 4);
+        const tx = a.x + box + 16, edge = a.x + a.w - 10;
+        const line1 = y + (tall ? 15 : rowH / 2 - 9), line2 = y + (tall ? 35 : rowH / 2 + 9);
+        // name, state badge, cost
+        const delta = w.op - installed.op;
+        this.refitText(w.op + " OP", edge, line1, l.short ? 13 : 14, P.accent, "right", 600);
+        const costW = this.refitWidth(w.op + " OP", l.short ? 13 : 14, 600);
+        if (equipped) this.refitText("已装", edge - costW - 10, line1, 10, P.good, "right", 600);
+        else if (!ok) this.refitText("装配点不足", edge - costW - 10, line1, 10, P.bad, "right", 600);
+        else if (delta) this.refitText((delta > 0 ? "+" : "") + delta, edge - costW - 10, line1, 11, delta > 0 ? P.bad : P.good, "right", 600);
+        this.refitText(w.name, tx, line1, l.short ? 14 : 16, P.text, "left", 600, edge - costW - 70 - tx);
+        // coloured figures
+        const tag = DAMAGE[w.damageType], tagW = this.refitWidth(tag, 10, 600) + 10;
+        this.rect(tx, line2 - 8, tagW, 16, DAMAGE_COLOR[w.damageType] + "2e", DAMAGE_COLOR[w.damageType] + "90");
+        this.refitText(tag, tx + tagW / 2, line2, 10, DAMAGE_COLOR[w.damageType], "center", 600);
+        const facts = [["伤害", number(rate(w, "damage")) + "/s", STAT.damage]];
+        if (w.flux) facts.push(["幅能", number(rate(w, "flux")) + "/s", STAT.flux]);
+        facts.push(["射程", String(w.range), STAT.range]);
+        if (w.ammo) facts.push(["弹药", String(w.ammo * (w.salvo || 1)), STAT.ammo]);
+        this.refitFacts(facts, tx + tagW + 8, line2, edge, l.short ? 11 : 12);
+        if (tall) this.refitText(EFFECT[w.damageType] + "　" + (PURPOSE[w.id] || w.purpose || ""), tx, y + rowH - 13, 10, P.dim, "left", 400, edge - tx);
+        c.restore();
+        this.hit(a.x, y, a.w, rowH, () => this.chooseRefitWeapon(w.id), { role: "refit-weapon", weaponId: w.id });
       });
-      if (list.length === 1) {
-        const y = listY + rowH + gap;
-        this.refitText("该槽型目前只有这一件兼容武器", a.x + 4, y + 14, 11, P.dim);
-      }
-      const infoY = listY + 2 * (rowH + gap) + (l.short ? 4 : 16);
-      const result = this.refitCandidate(), delta = selected.op - installed.op, same = installed.id === selected.id;
-      if (!l.short && a.h >= 455) {
-        this.line(a.x, infoY - 4, a.x + a.w, infoY - 4, P.line);
-        art.draw(this.ctx, selected, a.x, infoY + 10, 110, 110, { selected: true });
-        this.refitText(selected.name, a.x + 120, infoY + 26, 20, P.text, "left", 600);
-        this.refitText(PURPOSE[selected.id], a.x + 120, infoY + 54, 12, P.muted, "left", 400, a.w - 122);
-        this.refitText(EFFECT[selected.damageType], a.x + 120, infoY + 82, 12, P.accent);
-        const statY = infoY + 138, col = a.w / 3;
-        const stats = [
-          ["持续伤害 / 秒", rate(selected, "damage"), rate(installed, "damage"), false],
-          ["开火幅能 / 秒", rate(selected, "flux"), rate(installed, "flux"), true],
-          ["有效射程", selected.range, installed.range, false],
-        ];
-        stats.forEach(([label, value, old, lower], i) => {
-          const x = a.x + i * col;
-          this.refitText(label, x, statY, 11, P.muted);
-          this.refitText(number(value), x, statY + 28, 24, P.text, "left", 500);
-          if (!same && Math.round(value - old)) {
-            const diff = Math.round(value - old);
-            this.refitText((diff > 0 ? "+" : "") + diff, x + 80, statY + 28, 12, (diff < 0) === lower ? P.good : P.bad);
-          }
-        });
-        if (a.h > 490) {
-          this.refitText(selected.mode === "beam" ? "连续照射" : "单发 " + selected.damage + "  ·  间隔 " + selected.cooldown + " 秒", a.x, statY + 64, 12, P.muted);
-          this.refitText(selected.ammo ? "弹药 " + selected.ammo + " 发" : "无弹药限制", a.x + a.w, statY + 64, 12, P.muted, "right");
-        }
-      } else if (l.bottom - 44 - infoY >= 40) {
-        const compare = (value, old) => !same && Math.round(value) !== Math.round(old) ? number(old) + " → " + number(value) : number(value);
-        this.refitText("伤害 " + compare(rate(selected, "damage"), rate(installed, "damage")) + "/s   幅能 " + compare(rate(selected, "flux"), rate(installed, "flux")) + "/s", a.x, infoY + 6, l.short ? 11 : 13, P.muted);
-        this.refitText(EFFECT[selected.damageType], a.x, infoY + 23, l.short ? 10 : 12, P.accent);
-        if (l.bottom - 44 - infoY >= 64)
-          this.refitText("射程 " + compare(selected.range, installed.range) + (selected.ammo ? "   弹药 " + selected.ammo + " 发" : ""), a.x, infoY + 41, 10, P.muted);
-        if (!l.short && l.bottom - 44 - infoY >= 100)
-          this.refitText(PURPOSE[selected.id], a.x, infoY + 69, 12, P.muted, "left", 400, a.w);
-      }
-      const buttonW = l.short ? 128 : 154, buttonY = l.bottom - 44;
-      const note = state.message || (same ? "当前配置" : !result.ok ? "装配点不足" : delta === 0 ? "替换不改变装配点" : delta < 0 ? "替换节省 " + (-delta) + " OP" : "替换增加 " + delta + " OP");
-      this.refitText(note, a.x, buttonY + 22, l.short ? 11 : 12, !result.ok ? P.bad : P.muted, "left", 400, a.w - buttonW - 12);
-      this.refitButton(same ? "已装配" : !result.ok ? "装配点不足" : "安装至炮位 " + String(mountNumber).padStart(2, "0"), a.x + a.w - buttonW, buttonY, buttonW, 44, () => this.installRefitWeapon(), { primary: true, disabled: same || !result.ok, role: "refit-install" });
-      if (list.length > 2) {
-        // Two rows keep the current armory readable; future catalog expansion gets paging.
-        this.refitButton("‹", a.x + a.w - 96, infoY - 4, 44, 44, () => { state.page = Math.max(0, page - 1); }, { disabled: page === 0 });
-        this.refitButton("›", a.x + a.w - 48, infoY - 4, 44, 44, () => { state.page = Math.min(Math.ceil(list.length / 2) - 1, page + 1); }, { disabled: page >= Math.ceil(list.length / 2) - 1 });
-      }
+      if (list.length === 1) this.refitText("这种炮位目前只有这一件武器", a.x + 4, a.y + headH + step + 12, 11, P.dim);
+      if (state.message) this.refitText(state.message, a.x, a.y + a.h - noteH / 2 + 2, 11, /不足|没有|无法|不兼容/.test(state.message) ? P.bad : P.good, "left", 400, a.w);
     }
     drawRefitEngineering(l, d) {
-      const fit = this.refitState.fit, used = this.fitCost(d, fit), remain = d.op - used;
-      const y = l.footer, width = l.right - l.left, budgetW = width * (l.short ? 0.28 : 0.3);
-      this.line(l.left, y - 1, l.right, y - 1, "#47514d");
-      const budgetX = l.left;
-      this.refitText("装配点", budgetX, y + 19, 12, P.muted);
-      this.refitText(used + " / " + d.op, budgetX + budgetW - 20, y + 19, l.short ? 16 : 20, P.text, "right", 500);
-      const bx = budgetX, by = y + 36, bw = budgetW - 20;
-      this.rect(bx, by, bw, 5, "#253036");
-      const weaponsOP = used - (fit.vents || 0) - (fit.capacitors || 0);
-      this.rect(bx, by, bw * weaponsOP / d.op, 5, P.accent);
-      this.rect(bx + bw * weaponsOP / d.op, by, bw * (fit.vents || 0) / d.op, 5, "#93b8b0");
-      this.rect(bx + bw * (weaponsOP + (fit.vents || 0)) / d.op, by, bw * (fit.capacitors || 0) / d.op, 5, "#76909d");
-      this.refitText("剩余 " + remain + " OP", budgetX, y + 54, 11, remain ? P.muted : P.accent);
-      const upgradeX = l.left + budgetW, unitW = (width - budgetW) / 2;
-      [["vents", "散幅", d.fluxDissipation, 10, "/s"], ["capacitors", "容量", d.fluxCapacity, 200, ""]].forEach(([key, label, baseValue, step, suffix], i) => {
-        const x = upgradeX + i * unitW + 8, n = fit[key] || 0;
-        const narrow = unitW < 225;
-        if (narrow) {
-          this.refitText(label, x, y + 16, 11, P.muted);
-          this.refitText(number(baseValue + n * step) + suffix, x, y + 38, 11, P.text);
-        } else {
-          this.refitText(label + " " + number(baseValue + n * step) + suffix, x, y + 17, l.short ? 12 : 15, P.text);
-          this.refitText("每点 +" + step + suffix, x, y + 41, 10, P.muted);
-        }
-        const controlsX = x + unitW - (narrow ? 134 : l.short ? 145 : 157);
-        this.refitButton("−", controlsX, y + 10, 44, 44, () => this.changeFlux(key, -1), { disabled: !n, role: "refit-flux-minus", key, size: 20 });
-        this.refitText(n, controlsX + 63, y + 32, 18, P.accent, "center");
-        this.refitButton("+", controlsX + 82, y + 10, 44, 44, () => this.changeFlux(key, 1), { disabled: remain <= 0, role: "refit-flux-plus", key, size: 20 });
+      const f = l.footer, fit = this.refitState.fit, s = this.refitStats();
+      this.rect(f.x, f.y, f.w, f.h, "#0f161b", "#222d33");
+      const mid = f.y + f.h / 2, tight = f.w < 620;
+      // ── ordnance points ──
+      const aw = Math.round(f.w * (tight ? 0.24 : 0.25)), ax = f.x + 12;
+      this.refitText("装配点", ax, f.y + 15, 11, P.muted);
+      this.refitText(s.used + " / " + d.op, ax + aw - 24, f.y + 15, l.short ? 15 : 18, s.remain < 0 ? P.bad : P.text, "right", 600);
+      const bw = aw - 24, by = mid + 1, weaponsOP = s.used - s.upgrades;
+      this.rect(ax, by, bw, 6, "#232e34");
+      this.rect(ax, by, bw * Math.min(1, weaponsOP / d.op), 6, P.accent);
+      this.rect(ax + bw * weaponsOP / d.op, by, bw * (fit.vents || 0) / d.op, 6, STAT.vent);
+      this.rect(ax + bw * (weaponsOP + (fit.vents || 0)) / d.op, by, bw * (fit.capacitors || 0) / d.op, 6, STAT.flux);
+      this.refitText("剩余 " + s.remain, ax, f.y + f.h - 14, 11, s.remain ? P.muted : P.accent);
+      // ── steppers, measured from the right edge ──
+      const unit = tight ? 132 : 176, cx0 = f.x + f.w - unit * 2 - 8;
+      [["vents", "散逸", number(s.dissipation) + "/s", STAT.vent], ["capacitors", "容量", number(s.capacity), STAT.flux]].forEach(([key, label, value, color], i) => {
+        const x = cx0 + i * unit, n = fit[key] || 0, bh = Math.min(44, f.h - 12), y = f.y + (f.h - bh) / 2;
+        const tw = unit - 96;
+        this.refitText(label + (n ? " +" + n : ""), x + tw / 2, mid - 9, 10, P.muted, "center", 400, tw);
+        this.refitText(value, x + tw / 2, mid + 9, tight ? 12 : 14, color, "center", 600, tw);
+        this.refitButton("−", x + tw, y, 44, bh, () => this.changeFlux(key, -1), { disabled: !n, role: "refit-flux-minus", key, size: 20 });
+        this.refitButton("+", x + tw + 46, y, 44, bh, () => this.changeFlux(key, 1), { disabled: s.remain <= 0, role: "refit-flux-plus", key, size: 20 });
       });
-      if (!l.short) {
-        this.refitButton("恢复标准配装", l.left, y + 69, 116, 36, () => this.resetRefit(), { role: "refit-reset", size: 11 });
-        this.refitButton("撤销上一步", l.left + 126, y + 69, 104, 36, () => this.undoRefit(), { role: "refit-undo", disabled: !this.refitState.history.length, size: 11 });
-        this.refitText("武器、散幅与容量共用装配点；安装后立即应用。", l.right, y + 88, 11, P.dim, "right");
-      } else {
-        // Compact layouts put reversible reset/undo controls in the vacant header strip.
-        const x = Math.max(l.left + 222, this.headerRight() - 260);
-        if (this.headerRight() - x >= 258) {
-          this.refitButton("撤销", x, this.safe.top + 6, 60, 44, () => this.undoRefit(), { disabled: !this.refitState.history.length, role: "refit-undo", size: 11 });
-          this.refitButton("标准", x + 66, this.safe.top + 6, 60, 44, () => this.resetRefit(), { role: "refit-reset", size: 11 });
-        } else {
-          this.refitButton("···", this.headerRight() - 168, this.safe.top + 6, 44, 44, () => { this.refitState.more = !this.refitState.more; }, { role: "refit-more", size: 20 });
-          if (this.refitState.more) {
-            const mx = this.headerRight() - 224, my = this.safe.top + 53;
-            this.rect(mx, my, 224, 60, "#11191e", P.accent);
-            this.refitButton("撤销上一步", mx + 7, my + 8, 100, 44, () => { this.undoRefit(); this.refitState.more = false; }, { role: "refit-undo", disabled: !this.refitState.history.length, size: 11 });
-            this.refitButton("恢复标准", mx + 117, my + 8, 100, 44, () => { this.resetRefit(); this.refitState.more = false; }, { role: "refit-reset", size: 11 });
-          }
-        }
-      }
+      // ── flux balance: can this fit keep firing? ──
+      const bx = ax + aw, bwid = cx0 - bx - 10, load = s.weaponFlux, net = load - s.dissipation, netShield = net + s.upkeep;
+      this.line(bx - 6, f.y + 8, bx - 6, f.y + f.h - 8, "#222d33");
+      this.line(cx0 - 6, f.y + 8, cx0 - 6, f.y + f.h - 8, "#222d33");
+      this.refitFacts([["武器幅能", number(load) + "/s", STAT.flux], ["散逸", number(s.dissipation) + "/s", STAT.vent]], bx + 4, f.y + 15, bx + bwid, tight ? 11 : 12);
+      const gy = mid + 1;
+      this.rect(bx + 4, gy, bwid - 8, 6, "#232e34");
+      const scale = Math.max(load + s.upkeep, s.dissipation) || 1, gw = bwid - 8;
+      this.rect(bx + 4, gy, gw * load / scale, 6, net > 0 ? P.bad : STAT.flux);
+      this.rect(bx + 4 + gw * load / scale, gy, gw * s.upkeep / scale, 6, "#5d7684");
+      this.rect(bx + 4 + gw * s.dissipation / scale - 1, gy - 3, 2, 12, STAT.vent);
+      const seconds = (v) => (s.capacity / v < 99 ? Math.round(s.capacity / v) + " 秒" : "很久");
+      const verdict = netShield <= 0 ? ["举盾齐射也能一直打", P.good]
+        : net <= 0 ? ["齐射可持续；举盾时 " + seconds(netShield) + "满幅能", STAT.ammo]
+        : ["齐射 " + seconds(net) + "满幅能，举盾 " + seconds(netShield), P.bad];
+      this.refitText(verdict[0], bx + 4, f.y + f.h - 14, 11, verdict[1], "left", 400, bwid - 8);
     }
   }
   return { GameUI };

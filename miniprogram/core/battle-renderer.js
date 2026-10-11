@@ -23,7 +23,11 @@
       shake: 0,
       lastShake: -10,
       beamHits: {},
+      pending: [],
+      flash: 0,
+      beamEmit: 0,
     };
+    ui.hitStop = 0;
     ui.screenShake = { x: 0, y: 0, strength: 0 };
     return ui._worldFX;
   }
@@ -167,8 +171,55 @@
           ? Math.min(1.2, e.damage / 600)
           : 0;
     if (impulse > 0 && f.time - f.lastShake >= 0.35) {
-      f.shake = Math.max(f.shake, impulse);
+      f.shake = Math.max(f.shake, impulse * 2.4);
       f.lastShake = f.time;
+      if (ui.p && ui.p.vibrate) ui.p.vibrate(explosion || impulse > 0.8);
+    }
+    // Heavy contact freezes the fight for a few frames so the blow can register.
+    const onScreen = distance < 1100;
+    if (!beam && onScreen && !e.secondary) {
+      const stop = explosion
+        ? 0.11
+        : e.blocked
+          ? 0
+          : tier === 2
+            ? 0.07
+            : tier === 1 &&
+                (e.targetId === ui.flagshipId || e.sourceId === ui.flagshipId)
+              ? 0.035
+              : 0;
+      if (stop > (ui.hitStop || 0)) ui.hitStop = stop;
+    }
+    if (explosion && !e.secondary) {
+      f.flash = Math.max(f.flash, onScreen ? 0.5 : 0.15);
+      // The hull breaks up over a second: secondary blasts, then drifting wreckage.
+      const hull = (ship && ship.radius) || 60;
+      for (let i = 0; i < 5; i++)
+        f.pending.push({
+          at: f.time + 0.12 + i * 0.16 + rand(f) * 0.08,
+          x: x + (rand(f) - 0.5) * hull * 1.3,
+          y: y + (rand(f) - 0.5) * hull * 1.3,
+          radius: hull * (0.35 + rand(f) * 0.35),
+        });
+      const chunks = clamp(Math.round(hull / 14), 4, 10);
+      for (let i = 0; i < chunks; i++) {
+        const a = rand(f) * TAU,
+          speed = 18 + rand(f) * 70,
+          ttl = 2.2 + rand(f) * 2.2;
+        particle(f, {
+          x: x + Math.cos(a) * hull * 0.3,
+          y: y + Math.sin(a) * hull * 0.3,
+          vx: Math.cos(a) * speed + (ship ? ship.vx || 0 : 0) * 0.6,
+          vy: Math.sin(a) * speed + (ship ? ship.vy || 0 : 0) * 0.6,
+          life: ttl,
+          max: ttl,
+          r: hull * (0.07 + rand(f) * 0.12),
+          color: "#3a3f44",
+          kind: "chunk",
+          angle: a,
+          spin: (rand(f) - 0.5) * 5,
+        });
+      }
     }
     const count = explosion ? 44 : beam ? 2 : shield ? 9 : 12 + tier * 10;
     for (let i = 0; i < count; i++) {
@@ -229,6 +280,48 @@
         ] = f.time;
       } else if (e.type === "hit" || e.type === "explosion") burst(f, e, s, ui);
     }
+    for (const q of f.pending)
+      if (q.at <= f.time)
+        burst(
+          f,
+          {
+            type: "explosion",
+            x: q.x,
+            y: q.y,
+            radius: q.radius,
+            secondary: true,
+          },
+          null,
+          ui,
+        );
+    f.pending = f.pending.filter((q) => q.at > f.time);
+    f.flash = Math.max(0, f.flash - dt * 3.2);
+    // Beam contact throws a continuous spray rather than one burst per tick.
+    f.beamEmit += dt;
+    if (f.beamEmit >= 0.03) {
+      f.beamEmit %= 0.03;
+      for (const beam of b.beams || []) {
+        if (!Number.isFinite(beam.x2)) continue;
+        const back = Math.atan2(beam.y - beam.y2, beam.x - beam.x2);
+        for (let i = 0; i < 2; i++) {
+          const a = back + (rand(f) - 0.5) * 2.4,
+            speed = 60 + rand(f) * 170,
+            ttl = 0.12 + rand(f) * 0.22;
+          particle(f, {
+            x: beam.x2,
+            y: beam.y2,
+            vx: Math.cos(a) * speed,
+            vy: Math.sin(a) * speed,
+            life: ttl,
+            max: ttl,
+            r: 1 + rand(f) * 1.6,
+            color: i ? beam.color || "#9fdcff" : "#f2fbff",
+            kind: "spark",
+            angle: a,
+          });
+        }
+      }
+    }
     for (const p of f.particles) {
       p.life -= dt;
       p.x += p.vx * dt;
@@ -248,6 +341,26 @@
       for (const s of b.ships || []) {
         const d = catalog.getShip(s.typeId);
         if (!d || s.ghost) continue;
+        if (s.status === "active" && s.hp < s.maxHp * 0.55 && rand(f) < 0.5) {
+          const p = point(
+              s,
+              (rand(f) - 0.5) * s.length * 0.5,
+              (rand(f) - 0.5) * s.width * 0.4,
+            ),
+            fire = s.hp < s.maxHp * 0.28 && rand(f) < 0.5,
+            ttl = fire ? 0.45 : 1.1;
+          particle(f, {
+            x: p.x,
+            y: p.y,
+            vx: (s.vx || 0) * 0.35 + rand(f) * 10 - 5,
+            vy: (s.vy || 0) * 0.35 + rand(f) * 10 - 5,
+            life: ttl,
+            max: ttl,
+            r: fire ? 2.5 + rand(f) * 2.5 : 4 + rand(f) * 6,
+            color: fire ? "#ff9a45" : "#5b514b",
+            kind: fire ? "ember" : "smoke",
+          });
+        }
         if (s.status === "active") {
           for (const slot of slots(s, d)) {
             const p = point(s, slot.x, slot.y),
@@ -307,7 +420,7 @@
       if (t.length > 9) t.shift();
     }
     for (const k of Object.keys(f.trails)) if (!live.has(k)) delete f.trails[k];
-    f.shake *= Math.exp(-dt * 16);
+    f.shake *= Math.exp(-dt * 11);
     if (f.shake < 0.02) f.shake = 0;
     const gain =
       ui.shakeIntensity === undefined ? 0.65 : clamp(ui.shakeIntensity, 0, 1);
@@ -351,11 +464,11 @@
       const ratio = Math.max(w / img.width, h / img.height) * 1.12,
         iw = img.width * ratio,
         ih = img.height * ratio;
-      c.globalAlpha = 0.67;
+      c.globalAlpha = 0.52;
       c.drawImage(
         img,
-        (w - iw) / 2 - Math.sin(cx * 0.0002) * 15,
-        (h - ih) / 2 - Math.sin(cy * 0.0002) * 12,
+        (w - iw) / 2 - Math.sin(cx * 0.00035) * iw * 0.05,
+        (h - ih) / 2 - Math.sin(cy * 0.00035) * ih * 0.05,
         iw,
         ih,
       );
@@ -379,8 +492,8 @@
     );
     for (let i = 0; i < stars.length; i++) {
       const s = stars[i],
-        x = (((s.x * w - (cx * 0.022) / s.depth) % w) + w) % w,
-        y = (((s.y * h - (cy * 0.022) / s.depth) % h) + h) % h;
+        x = (((s.x * w - (cx * 0.09) / s.depth) % w) + w) % w,
+        y = (((s.y * h - (cy * 0.09) / s.depth) % h) + h) % h;
       c.globalAlpha = s.a;
       circle(c, x, y, s.r, i % 4 ? "#b9ced8" : "#e5c6a9");
       if (s.r > 1) {
@@ -388,12 +501,22 @@
         line(c, x, y - 3, x, y + 3, "#b3d6e2", 0.5);
       }
     }
-    c.globalAlpha = 0.08;
-    for (let i = 0; i < 40; i++) {
-      const s = stars[i],
-        x = (((s.x * w - cx * 0.07) % w) + w) % w,
-        y = (((s.y * h - cy * 0.07) % h) + h) % h;
-      line(c, x, y, x + 1.5, y + 0.4, "#86a4ac", 1);
+    // Near dust moves almost with the world and streaks along the flagship's
+    // velocity, which is what makes thrust read as speed.
+    const own =
+        !staticView &&
+        ui.battle &&
+        (ui.battle.ships || []).find((s) => s.id === ui.flagshipId),
+      zoom = (ui.camera && ui.camera.scale) || 0.5,
+      svx = own ? (own.vx || 0) * zoom * 0.07 : 0,
+      svy = own ? (own.vy || 0) * zoom * 0.07 : 0;
+    c.globalAlpha = 0.2;
+    for (let i = 0; i < 46; i++) {
+      const s = stars[i * 7],
+        k = zoom * (0.45 + (i % 3) * 0.2),
+        x = (((s.x * w * 1.7 - cx * k) % w) + w) % w,
+        y = (((s.y * h * 1.7 - cy * k) % h) + h) % h;
+      line(c, x, y, x - svx - 1.2, y - svy - 0.3, "#9fbcc4", 1);
     }
     c.restore();
   }
@@ -611,7 +734,7 @@
       c.rotate(s.angle);
       const g = c.createRadialGradient(0, 0, rr * 0.7, 0, 0, rr);
       g.addColorStop(0, "#69bfff00");
-      g.addColorStop(1, "#69bfff0d");
+      g.addColorStop(1, "#69bfff24");
       c.beginPath();
       c.moveTo(0, 0);
       c.arc(0, 0, rr, -arc / 2, arc / 2);
@@ -620,8 +743,8 @@
       c.fill();
       c.beginPath();
       c.arc(0, 0, rr, -arc / 2, arc / 2);
-      c.strokeStyle = "#8bdaee65";
-      c.lineWidth = 1.2;
+      c.strokeStyle = "#a6e6f8a0";
+      c.lineWidth = Math.max(1.2, 2.2 * z);
       c.stroke();
       c.restore();
     }
@@ -647,17 +770,24 @@
     if ((size > 28 || selected) && s.hp > 0) {
       const bw = clamp(size * 0.63, 28, 72),
         y = p.y + size * 0.5 + 8;
-      c.fillStyle = "#253543";
-      c.fillRect(p.x - bw / 2, y, bw, 3);
-      c.fillStyle = col;
-      c.fillRect(p.x - bw / 2, y, bw * clamp(s.hp / s.maxHp, 0, 1), 3);
-      c.fillStyle = "#d5b57d";
-      c.fillRect(
-        p.x - bw / 2,
-        y + 6,
-        bw * clamp((s.softFlux + s.hardFlux) / s.maxFlux, 0, 1),
-        2,
-      );
+      // The flagship carries its own ring gauges in battle; skip the duplicate bars.
+      const ringed =
+        ui.screen === "battle" &&
+        s.id === ui.flagshipId &&
+        ui.drawFlagshipGauge;
+      if (!ringed) {
+        c.fillStyle = "#253543";
+        c.fillRect(p.x - bw / 2, y, bw, 3);
+        c.fillStyle = col;
+        c.fillRect(p.x - bw / 2, y, bw * clamp(s.hp / s.maxHp, 0, 1), 3);
+        c.fillStyle = "#d5b57d";
+        c.fillRect(
+          p.x - bw / 2,
+          y + 6,
+          bw * clamp((s.softFlux + s.hardFlux) / s.maxFlux, 0, 1),
+          2,
+        );
+      }
       if (ui.text) {
         if (s.overload > 0 || s.venting > 0)
           ui.text(
@@ -671,6 +801,38 @@
         if (ui.screen !== "battle" || selected)
           ui.text(d.name, p.x, y + 20, 11, col, "center");
       }
+    }
+    if (s.overload > 0 && !s.ghost && size >= 18) {
+      // Overload: crawling arcs tell the player this ship is helpless right now.
+      c.save();
+      c.globalCompositeOperation = "lighter";
+      c.strokeStyle = "#bfe9ff";
+      c.lineWidth = Math.max(1, 1.6 * z);
+      const tick = Math.floor(f.time * 18);
+      for (let i = 0; i < 4; i++) {
+        let n = (tick * 7919 + i * 104729 + (s.x | 0)) >>> 0;
+        const next = () =>
+          (n = (Math.imul(n, 1664525) + 1013904223) >>> 0) / 4294967296;
+        let a = next() * TAU,
+          rad = size * (0.15 + next() * 0.3);
+        c.beginPath();
+        c.moveTo(p.x + Math.cos(a) * rad, p.y + Math.sin(a) * rad);
+        for (let j = 0; j < 4; j++) {
+          a += (next() - 0.5) * 1.3;
+          rad += (next() - 0.4) * size * 0.14;
+          c.lineTo(p.x + Math.cos(a) * rad, p.y + Math.sin(a) * rad);
+        }
+        c.stroke();
+      }
+      glow(
+        c,
+        p.x,
+        p.y,
+        size * 0.55,
+        "#7fc8ff",
+        0.18 + 0.12 * Math.sin(f.time * 30),
+      );
+      c.restore();
     }
     if (s.systemTime > 0) {
       c.beginPath();
@@ -698,7 +860,25 @@
       const r =
         Math.max(0.65, p.r * z) *
         (p.kind === "smoke" ? 1 + (1 - life) * 2.7 : 1);
-      if (p.kind === "smoke" || p.kind === "exhaust") {
+      if (p.kind === "chunk") {
+        // Wreckage: dark tumbling plates with a cooling ember edge.
+        c.save();
+        c.globalAlpha = Math.min(1, life * 2.5);
+        c.translate(q.x, q.y);
+        c.rotate(p.angle + (p.max - p.life) * (p.spin || 2));
+        c.fillStyle = "#2b3238";
+        c.beginPath();
+        c.moveTo(-r, -r * 0.5);
+        c.lineTo(r * 0.7, -r * 0.7);
+        c.lineTo(r, r * 0.3);
+        c.lineTo(-r * 0.4, r * 0.7);
+        c.closePath();
+        c.fill();
+        c.strokeStyle = life > 0.5 ? "#ff9d52" : "#5d6a70";
+        c.lineWidth = Math.max(0.6, r * 0.12);
+        c.stroke();
+        c.restore();
+      } else if (p.kind === "smoke" || p.kind === "exhaust") {
         circle(c, q.x, q.y, r, p.kind === "smoke" ? "#5b514b" : p.color);
       } else {
         c.globalCompositeOperation = "lighter";
@@ -754,12 +934,13 @@
         c.rotate(a);
         const shellLength = Math.max(2.5, (heavy ? 9 : 4) * z),
           shellWidth = Math.max(0.85, (heavy ? 2.6 : 1.2) * z),
-          streak = Math.max(5, Math.min(23, (p.speed || 650) * 0.025 * z)),
+          streak = Math.max(7, Math.min(46, (p.speed || 650) * 0.05 * z)),
           gradient = c.createLinearGradient(-streak, 0, 0, 0);
         gradient.addColorStop(0, "#ffc87700");
         gradient.addColorStop(0.65, "#ffbf7060");
         gradient.addColorStop(1, "#ffe0a9cc");
         line(c, -streak, 0, -shellLength * 0.35, 0, gradient, shellWidth);
+        glow(c, 0, 0, shellWidth * (heavy ? 4.5 : 3.2), col, heavy ? 0.7 : 0.5);
         c.globalCompositeOperation = "source-over";
         c.fillStyle = heavy ? "#bca684" : "#ead4a7";
         c.beginPath();
@@ -812,7 +993,10 @@
           f.time * 40,
         );
         c.fillStyle = "#d3d9cd";
-        c.fillRect(-4 * z, -Math.max(1, z), 8 * z, Math.max(2, z * 2));
+        const big = p.child ? 0.7 : w && w.size === "large" ? 2 : w && w.size === "medium" ? 1.4 : 1;
+        c.fillRect(-4 * z * big, -Math.max(1, z * big), 8 * z * big, Math.max(2, z * 2 * big));
+        c.fillStyle = col;
+        c.fillRect(2 * z * big, -Math.max(1, z * big), 2 * z * big, Math.max(2, z * 2 * big));
         c.restore();
       } else circle(c, q.x, q.y, width * 0.75, "#fff5de");
     }
@@ -820,12 +1004,39 @@
       const p = ui.toScreen(beam.x, beam.y),
         q = ui.toScreen(beam.x2, beam.y2),
         col = beam.color || "#8cdec8",
-        pulse = 1 + Math.sin(f.time * 45) * 0.12;
-      line(c, p.x, p.y, q.x, q.y, col + "12", Math.max(5, 10 * z) * pulse);
-      line(c, p.x, p.y, q.x, q.y, col + "90", Math.max(2, 3 * z));
-      line(c, p.x, p.y, q.x, q.y, "#e9fbff", Math.max(0.75, z));
-      glow(c, p.x, p.y, Math.max(4, 10 * z), col, 0.6);
-      glow(c, q.x, q.y, Math.max(5, 14 * z), col, 0.65);
+        heavy = !(catalog.getWeapon(beam.weaponId) || {}).pd,
+        k = heavy ? 1 : 0.55,
+        pulse =
+          1 +
+          Math.sin(f.time * 47 + p.x * 0.05) * 0.16 +
+          Math.sin(f.time * 131) * 0.08,
+        length = Math.hypot(q.x - p.x, q.y - p.y) || 1,
+        ux = (q.x - p.x) / length,
+        uy = (q.y - p.y) / length;
+      // Soft halo, coloured body, white-hot core; width breathes so it reads as energy.
+      line(c, p.x, p.y, q.x, q.y, col + "16", Math.max(7, 20 * z) * pulse * k);
+      line(c, p.x, p.y, q.x, q.y, col + "55", Math.max(3.5, 9 * z) * pulse * k);
+      line(c, p.x, p.y, q.x, q.y, col + "d0", Math.max(2, 4.2 * z) * k);
+      line(c, p.x, p.y, q.x, q.y, "#f4fdff", Math.max(0.9, 1.7 * z) * k);
+      // Energy pulses racing down the beam.
+      const step = Math.max(26, 70 * z),
+        offset = (f.time * 620 * z) % step;
+      c.globalAlpha = 0.55;
+      for (let d = offset; d < length; d += step)
+        line(
+          c,
+          p.x + ux * d,
+          p.y + uy * d,
+          p.x + ux * Math.min(length, d + step * 0.22),
+          p.y + uy * Math.min(length, d + step * 0.22),
+          "#ffffff",
+          Math.max(1.4, 3 * z) * k,
+        );
+      c.globalAlpha = 1;
+      glow(c, p.x, p.y, Math.max(6, 16 * z) * k, col, 0.75);
+      circle(c, p.x, p.y, Math.max(1.5, 3.4 * z) * k, "#f4fdff");
+      glow(c, q.x, q.y, Math.max(9, 26 * z) * pulse * k, col, 0.8);
+      circle(c, q.x, q.y, Math.max(2, 5 * z) * pulse * k, "#ffffff");
     }
     for (const e of f.bursts) {
       let x = e.x,
@@ -846,28 +1057,69 @@
         r = Math.max(3, e.r * z);
       c.globalAlpha = life;
       if (e.shield) {
-        c.save();
-        c.translate(q.x, q.y);
-        c.rotate(angle);
-        c.scale(0.4, 1);
-        for (let i = 0; i < 3; i++) {
-          c.beginPath();
-          c.arc(0, 0, r * (0.3 + age * 2 + i * 0.26), 0, TAU);
-          c.strokeStyle = i ? "#73bded70" : "#cdf9ff";
-          c.lineWidth = Math.max(0.7, 2 * (1 - age));
-          c.stroke();
+        const target = e.targetId && b.ships.find((s) => s.id === e.targetId);
+        if (target && target.radius) {
+          // The hit spreads sideways across the bubble instead of floating in space.
+          const o = ui.toScreen(target.x, target.y),
+            rr = (target.radius + 8) * z,
+            at = Math.atan2(q.y - o.y, q.x - o.x),
+            spread = (0.12 + age * 0.55) * (1 + e.tier * 0.35);
+          for (let i = 0; i < 3; i++) {
+            c.beginPath();
+            c.arc(
+              o.x,
+              o.y,
+              rr + i * 2.2,
+              at - spread * (1 - i * 0.22),
+              at + spread * (1 - i * 0.22),
+            );
+            c.strokeStyle = i ? "#73c6f0" : "#e4fbff";
+            c.lineWidth = Math.max(
+              1,
+              (3.4 - i) * (1 - age) * (1 + e.tier * 0.4),
+            );
+            c.stroke();
+          }
+          for (const side of [-1, 1]) {
+            const a2 = at + side * spread;
+            glow(
+              c,
+              o.x + Math.cos(a2) * rr,
+              o.y + Math.sin(a2) * rr,
+              r * 0.55,
+              "#bdeeff",
+              life * 0.8,
+            );
+          }
+        } else {
+          c.save();
+          c.translate(q.x, q.y);
+          c.rotate(angle);
+          c.scale(0.4, 1);
+          for (let i = 0; i < 3; i++) {
+            c.beginPath();
+            c.arc(0, 0, r * (0.3 + age * 2 + i * 0.26), 0, TAU);
+            c.strokeStyle = i ? "#73bded70" : "#cdf9ff";
+            c.lineWidth = Math.max(0.7, 2 * (1 - age));
+            c.stroke();
+          }
+          c.restore();
         }
-        c.restore();
-        glow(c, q.x, q.y, r * 1.25, "#8bdcff", life * 0.55);
+        glow(c, q.x, q.y, r * 1.5, "#8bdcff", life * 0.7);
+        circle(c, q.x, q.y, r * 0.3 * life, "#f2fdff");
       } else if (e.explosion) {
         glow(c, q.x, q.y, r * (0.6 + age * 1.4), "#ff7c2a", life * 0.65);
         glow(c, q.x, q.y, r * (0.35 + age * 0.5), "#ffc77a", life);
         glow(c, q.x, q.y, r * 0.32 * life, "#fff4cc", life);
-        c.beginPath();
-        c.arc(q.x, q.y, r * (0.35 + age * 2.1), 0, TAU);
-        c.strokeStyle = "#e2bd8260";
-        c.lineWidth = Math.max(0.7, 3 * life);
-        c.stroke();
+        if (age < 0.14)
+          glow(c, q.x, q.y, r * (0.9 + age * 4), "#fffbe8", 1 - age / 0.14);
+        for (const ring of [2.4, 1.5]) {
+          c.beginPath();
+          c.arc(q.x, q.y, r * (0.35 + age * ring), 0, TAU);
+          c.strokeStyle = ring > 2 ? "#ffd9a0" : "#ff9a4a";
+          c.lineWidth = Math.max(0.8, (ring > 2 ? 5 : 3) * z * life * life);
+          c.stroke();
+        }
       } else if (e.beam) {
         glow(c, q.x, q.y, r, e.color, life * 0.35);
         circle(c, q.x, q.y, Math.max(0.7, r * 0.2) * life, "#dcf4ff");
@@ -902,6 +1154,11 @@
           c.stroke();
         }
       }
+    }
+    if (f.flash > 0.01) {
+      c.globalAlpha = Math.min(0.2, f.flash * 0.45);
+      c.fillStyle = "#ffe9c4";
+      c.fillRect(0, 0, ui.width, ui.height);
     }
     c.restore();
   }

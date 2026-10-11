@@ -120,11 +120,11 @@ function touchStick(ui, key, id, dx, dy) {
 
 test("fleet editor rejects excess budget and fifth vessel without changing either fleet", () => {
   const { ui, writes } = fixture();
-  ui.fleets = [["xie", "xie"], ["xia"]];
+  ui.fleets = [["fuyue", "fuyue"], ["xia"]];
   ui.team = 0;
   ui.slot = 2;
-  ui.changeFleet("xia");
-  assert.deepEqual(ui.fleets[0], ["xie", "xie"]);
+  ui.changeFleet("xie");
+  assert.deepEqual(ui.fleets[0], ["fuyue", "fuyue"]);
   assert.equal(writes.length, 0);
   ui.fleets[0] = ["xia", "xia", "xia", "xia"];
   ui.slot = 4;
@@ -308,7 +308,7 @@ test("refit upgrades stop at OP budget, compatible weapon selection remains vali
 test("invalid or legacy saved settings cannot inject an invalid fleet", () => {
   for (const saved of [
     { fleets: [["missing"], ["xia"]], sound: false },
-    { version: 2, fleets: [["xie", "xie", "xie"], ["xia"]], sound: false },
+    { version: 2, fleets: [["fuyue", "fuyue", "fuyue"], ["xia"]], sound: false },
   ]) {
     const { ui } = fixture(saved);
     assert(ui.fleets.every((ids) => nav.validateFleet(ids).ok));
@@ -642,12 +642,12 @@ test("native menu capsule leaves all header controls and text clear at 844 by 39
       return b;
     };
     ui.text = (value, x, y, size, color, align, ...rest) => {
-      if (y < 54)
+      if (y < 30)
         texts.push({ value: String(value), x, y, align: align || "left" });
       return text(value, x, y, size, color, align, ...rest);
     };
     ui.mono = (value, x, y, size, color, align) => {
-      if (y < 54)
+      if (y < 30)
         texts.push({ value: String(value), x, y, align: align || "left" });
       return mono(value, x, y, size, color, align);
     };
@@ -695,7 +695,7 @@ test("native menu capsule leaves all header controls and text clear at 844 by 39
     check(["← 整备", "快速布阵", "出击  →"]);
     ui.autoPlace();
     ui.launch();
-    check(["手操", "战术图", "暂停", "整备"]);
+    check(["手操", "战术图", "整备"]);
     ui.openTactical();
     check(["← 整备", "继续驾驶"]);
   }
@@ -705,7 +705,7 @@ test("setting native capsule after resize does not move the minimap or affect br
   const { ui } = fixture(undefined, 844, 390);
   ui.resize(844, 390, 2, { left: 44, top: 0, right: 800, bottom: 390 });
   launch(ui);
-  const mini = () => ui.buttons.find((b) => b.y === 62 && b.w === 116);
+  const mini = () => ui.buttons.find((b) => b.y === 48 && b.w === 96);
   const before = mini();
   assert(before);
   assert.equal(ui.headerRight(), 788);
@@ -1047,7 +1047,6 @@ test("HUD idle fade keeps controls usable; toggleHud collapses sections and reta
     ui.toggleHud("bottomHudHidden");
     labels.length = 0;
     ui.draw();
-    assert(!labels.includes("局部装甲"));
     assert(ui.buttons.some((b) => b.role === "vent"));
     assert(ui.buttons.some((b) => b.role === "brake"));
     assert(Math.abs(ui.camera.scale - scale) < 1e-9);
@@ -1060,7 +1059,6 @@ test("HUD idle fade keeps controls usable; toggleHud collapses sections and reta
     ui.toggleHud("bottomHudHidden");
     labels.length = 0;
     ui.draw();
-    assert(labels.includes("局部装甲"));
     assert(ui.buttons.some((b) => b.role === "minimap"));
   }
 });

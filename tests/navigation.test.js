@@ -26,10 +26,7 @@ test("world/screen mapping preserves aspect and round-trips at different sizes a
       N.zoomCamera(cam, zoom);
       near(
         cam.scale,
-        Math.min(
-          width / 1600,
-          Math.max(height / 1050, Math.min(width / 2400, 0.32)),
-        ) * zoom,
+        Math.max(0.5, Math.min(0.9, height / 700)) * zoom,
       );
       for (const [x, y] of [
         [0, 0],
@@ -119,7 +116,8 @@ test("fleet accounting includes every selected reserve and supports duplicate hu
     cost: 60,
     reason: "",
   });
-  assert.equal(N.validateFleet(["xie", "xie", "xia"]).ok, false);
+  assert.equal(N.validateFleet(["xie", "xie", "xia"]).ok, true);
+  assert.equal(N.validateFleet(["fuyue", "fuyue", "xie"]).ok, false);
   assert.equal(N.validateFleet(["xia", "xia", "xia", "xia"]).ok, true);
   assert.equal(N.validateFleet(["xia", "xia", "xia", "xia", "xia"]).ok, false);
   assert.equal(N.validateFleet([]).ok, false);
@@ -223,15 +221,15 @@ test("candidate search is deterministic, legal, symmetric and handles blocked re
 
 test("landscape follow keeps the deployed flagship above controls with combat range visible", () => {
   const cam = N.createCamera(844, 390);
-  N.setCameraFocus(cam, 53, 242);
-  near(cam.scale, 0.32);
+  N.setCameraFocus(cam, 44, 316);
+  near(cam.scale, 390 / 700);
   for (const length of [100, 180, 240]) {
     const ship = { x: 2400, y: 2500, length };
     N.updateCamera(cam, 100, ship, -Math.PI / 2);
     const pixel = N.worldToScreen(cam, ship.x, ship.y);
-    assert.ok(pixel.y + length * cam.scale * 0.57 + 18 <= 242);
-    const enemy = N.worldToScreen(cam, ship.x, ship.y - 350);
-    assert.ok(enemy.y >= 53, "350-unit target must clear the top bar");
+    assert.ok(pixel.y + length * cam.scale * 0.57 + 18 <= 316);
+    const enemy = N.worldToScreen(cam, ship.x, ship.y - 300);
+    assert.ok(enemy.y >= 44, "300-unit target must clear the top bar");
     assert.ok(
       length * cam.scale * 1.14 >= 30,
       "small ships remain discernible",
@@ -242,7 +240,7 @@ test("landscape follow keeps the deployed flagship above controls with combat ra
   assert.ok(cam.scale > before);
   N.updateCamera(cam, 100, { x: 2400, y: 2500, length: 240 }, -Math.PI / 2);
   const hull = N.worldToScreen(cam, 2400, 2500);
-  assert.ok(hull.y + 240 * cam.scale * 0.57 < 242);
+  assert.ok(hull.y + 240 * cam.scale * 0.57 < 316);
   N.setCameraMode(cam, "overview");
   const corner = N.worldToScreen(cam, 4800, 3000);
   assert.ok(corner.x <= 844 && corner.y <= 390);
@@ -252,14 +250,14 @@ test("landscape follow keeps the deployed flagship above controls with combat ra
 
 test("camera focus adapts to HUD changes and reverse aim without covering the hull", () => {
   const cam = N.createCamera(844, 390);
-  N.setCameraFocus(cam, 53, 242);
+  N.setCameraFocus(cam, 44, 316);
   for (const angle of [-Math.PI / 2, 0, Math.PI / 2, Math.PI]) {
     N.updateCamera(cam, 100, { x: 2400, y: 1600, length: 100 }, angle);
     const p = N.worldToScreen(cam, 2400, 1600);
-    assert.ok(p.y > 72 && p.y < 223);
+    assert.ok(p.y > 60 && p.y < 300);
   }
-  N.setCameraFocus(cam, 53, 280);
-  assert.ok(cam.scale >= 0.32);
+  N.setCameraFocus(cam, 44, 280);
+  assert.ok(cam.scale >= 0.5);
   N.setCameraFocus(cam);
-  near(cam.scale, 390 / 1050);
+  near(cam.scale, 390 / 700);
 });

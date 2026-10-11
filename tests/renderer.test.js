@@ -255,7 +255,7 @@ test("shield impact stays attached when its target translates and rotates", () =
   assert.ok(
     calls.some(
       (c) =>
-        c.method === "translate" &&
+        c.method === "arc" &&
         Math.abs(c.args[0] - 350) < 1e-8 &&
         Math.abs(c.args[1] - 378) < 1e-8,
     ),

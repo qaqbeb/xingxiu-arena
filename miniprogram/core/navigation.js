@@ -5,7 +5,7 @@
       ? require("./ships")
       : root.StarShips;
   const WORLD = Object.freeze({ width: 4800, height: 3000 });
-  const BUDGET = 60;
+  const BUDGET = 100;
   const MAX_FLEET = 4;
   const clamp = (n, low, high) => Math.max(low, Math.min(high, n));
   const positive = (n, fallback) =>
@@ -24,7 +24,7 @@
     if (ids.length < 1 || ids.length > MAX_FLEET)
       return { ok: false, cost, reason: "编队须有1至4艘舰船（含预备舰）" };
     if (cost > BUDGET)
-      return { ok: false, cost, reason: "编队总预算超过60（含预备舰）" };
+      return { ok: false, cost, reason: "编队总预算超过" + BUDGET + "（含预备舰）" };
     return { ok: true, cost, reason: "" };
   }
 
@@ -65,15 +65,9 @@
     return cam;
   }
   function rescale(cam) {
-    // Vertical engagement distance, rather than ultrawide display width, limits
-    // a useful default zoom. Explicit zoom still lets the pilot inspect a hull.
-    cam.baseScale = Math.min(
-      cam.width / 1600,
-      Math.max(
-        focusBounds(cam).height / 1050,
-        Math.min(cam.width / 2400, 0.32),
-      ),
-    );
+    // Hulls must read as ships on a phone: scale follows screen height so the
+    // flagship stays roughly a fifth of the view on any landscape device.
+    cam.baseScale = clamp(cam.height / 700, 0.5, 0.9);
     if (cam.mode === "overview") {
       cam.scale = fitScale(cam);
       cam.zoom = cam.scale / cam.baseScale;
@@ -138,7 +132,7 @@
       Math.max(12, (ship.length || 100) * cam.scale * 0.57 + 19),
     );
     const lead = Number.isFinite(aimAngle)
-      ? Math.min(240, (focus.height * 0.16) / cam.scale)
+      ? Math.min(260, (focus.height * 0.24) / cam.scale)
       : 0;
     const leadX = lead ? Math.cos(aimAngle) * lead : 0;
     const leadY = lead ? Math.sin(aimAngle) * lead : 0;
