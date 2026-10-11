@@ -7,7 +7,12 @@
     const d = Math.hypot((x || 0) - camera.x, (y || 0) - camera.y);
     // World-space listener: zoom never makes distant guns sound close.
     const edge = Math.max(0, Math.min(1, (2600 - d) / 500));
-    return { gain: edge / (1 + (d / 520) ** 2), far: d > 650, distance: d };
+    return {
+      gain: edge / (1 + (d / 520) ** 2),
+      far: d > 650,
+      distance: d,
+      pan: Math.max(-1, Math.min(1, ((x || 0) - camera.x) / 900)),
+    };
   }
   function beams(ui, catalog) {
     if (
