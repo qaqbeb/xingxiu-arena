@@ -185,11 +185,133 @@
       }
       bolt(c, 29, 74); bolt(c, 71, 74);
       rect(c, 39, 75, 6, 2, COPPER); rect(c, 55, 75, 6, 2, LIGHT);
+    },
+    // ── v0.4 armoury ──
+    poyue: function (c) {
+      foot(c, 36, 79, 28);
+      barrel(c, 41, 26, 18, 60);
+      rect(c, 39, 26, 22, 6, COPPER); rect(c, 40, 27, 20, 1.5, "#b19a75");
+      trunnion(c, 26, 58, 48);
+      plate(c, [33,46,67,46,71,70,61,83,39,83,29,70],
+        [36,49,64,49,67,68,59,79,41,79,33,68], [36,49,64,49]);
+      rect(c, 46, 54, 8, 14, DARK); rect(c, 47, 55, 6, 3, COPPER);
+      bolt(c, 38, 74); bolt(c, 62, 74);
+    },
+    liexing: function (c) {
+      foot(c, 33, 80, 34);
+      for (let i = 0; i < 4; i++) barrel(c, 33 + i * 9, 11 + (i % 2) * 4, 7, 58);
+      rect(c, 31, 30, 38, 4, COPPER); rect(c, 31, 44, 38, 3, LIGHT);
+      trunnion(c, 20, 57, 60);
+      plate(c, [29,45,71,45,75,70,63,84,37,84,25,70],
+        [32,48,68,48,71,68,61,80,39,80,29,68], [32,48,68,48,71,60]);
+      disc(c, 50, 66, 8, DARK); disc(c, 50, 65.5, 5.5, STEEL); disc(c, 49, 64.5, 2, LIGHT);
+      vent(c, 33, 58, 4, 6); vent(c, 61, 58, 4, 6);
+    },
+    tiansan: function (c) {
+      foot(c, 32, 79, 36);
+      trunnion(c, 18, 58, 64);
+      plate(c, [26,36,74,36,79,68,66,83,34,83,21,68],
+        [29,40,71,40,75,66,64,79,36,79,25,66], [29,40,71,40]);
+      for (let row = 0; row < 2; row++)
+        for (let col = 0; col < 4; col++) {
+          const x = 30 + col * 10.5, y = 18 + row * 13;
+          rect(c, x, y, 8, 11, DARK); rect(c, x + 1.5, y + 1.5, 5, 8, "#111b20");
+          rect(c, x, y, 8, 1.4, LIGHT);
+        }
+      rect(c, 29, 44, 42, 4, COPPER);
+      vent(c, 40, 56, 5, 20); bolt(c, 31, 72); bolt(c, 69, 72);
+    },
+    guanri: function (c) {
+      foot(c, 30, 82, 40);
+      barrel(c, 44, 9, 12, 66);
+      for (let y = 16; y < 58; y += 9) {
+        rect(c, 39, y, 22, 4, DARK); rect(c, 40, y, 20, 1.5, BLUE);
+      }
+      polygon(c, [24,34,38,28,40,62,30,70,22,58], DARK, LIGHT);
+      polygon(c, [76,34,62,28,60,62,70,70,78,58], DARK, LIGHT);
+      line(c, [27,38,36,34], COPPER, 1.6); line(c, [73,38,64,34], COPPER, 1.6);
+      trunnion(c, 14, 62, 72);
+      plate(c, [26,52,74,52,82,72,69,87,31,87,18,72],
+        [29,56,71,56,77,71,66,83,34,83,23,71], [29,56,71,56]);
+      rect(c, 46, 62, 8, 14, COPPER); bolt(c, 30, 76); bolt(c, 70, 76);
+    },
+    bailei: function (c) {
+      foot(c, 28, 82, 44);
+      for (let i = 0; i < 3; i++) barrel(c, 28 + i * 16, 14, 12, 60);
+      rect(c, 26, 22, 48, 5, COPPER); rect(c, 26, 36, 48, 4, "#5b6669");
+      trunnion(c, 12, 60, 76);
+      plate(c, [20,46,80,46,86,70,72,87,28,87,14,70],
+        [23,50,77,50,81,68,69,83,31,83,19,68], [23,50,77,50,81,68]);
+      rect(c, 30, 58, 40, 12, DARK);
+      for (let i = 0; i < 6; i++) rect(c, 32 + i * 6.3, 60, 4, 8, i % 2 ? COPPER : LIGHT);
+      bolt(c, 25, 76); bolt(c, 75, 76);
+    },
+    leiting: function (c) {
+      foot(c, 35, 80, 30);
+      plate(c, [30,30,70,30,76,70,63,85,37,85,24,70],
+        [33,34,67,34,72,68,61,81,39,81,28,68], [33,34,67,34]);
+      polygon(c, [40,10,60,10,64,40,50,48,36,40], DARK, LIGHT);
+      polygon(c, [44,14,56,14,58,37,50,42,42,37], BLUE);
+      line(c, [50,14,50,40], "#9cc0cc", 1.4);
+      disc(c, 50, 60, 14, DARK); disc(c, 50, 59.5, 11, "#365360");
+      disc(c, 50, 59.5, 7, "#4e7180"); disc(c, 49, 58, 2.6, "#a1b4b7");
+      vent(c, 31, 46, 5, 4); vent(c, 65, 46, 5, 4);
+      bolt(c, 38, 77); bolt(c, 62, 77);
+    },
+    yingguang: function (c) {
+      foot(c, 39, 78, 22);
+      trunnion(c, 28, 58, 44);
+      plate(c, [36,46,64,46,68,70,59,81,41,81,32,70],
+        [39,49,61,49,64,68,57,77,43,77,36,68], [39,49,61,49]);
+      barrel(c, 45, 20, 10, 56);
+      for (let y = 26; y < 50; y += 8) { rect(c, 42, y, 16, 4, DARK); rect(c, 43, y, 14, 1.5, BLUE); }
+      disc(c, 50, 64, 5, "#416673"); disc(c, 49.3, 63.3, 1.6, "#8ea8ae");
+    },
+    dingshen: function (c) {
+      foot(c, 40, 80, 20);
+      plate(c, [38,50,62,50,67,70,59,83,41,83,33,70],
+        [41,53,59,53,63,69,57,79,43,79,37,69], [41,53,59,53]);
+      polygon(c, [34,20,42,16,45,52,39,58,32,46], DARK, LIGHT);
+      polygon(c, [66,20,58,16,55,52,61,58,68,46], DARK, LIGHT);
+      line(c, [38,22,41,48], BLUE, 2); line(c, [62,22,59,48], BLUE, 2);
+      rect(c, 48, 24, 4, 34, "#7098a5"); rect(c, 49, 24, 1, 32, "#a1b4b7");
+      disc(c, 50, 66, 6, DARK); disc(c, 50, 65.6, 3.6, "#4e7180");
+    },
+    pojun: function (c) {
+      foot(c, 33, 80, 34);
+      trunnion(c, 20, 60, 60);
+      plate(c, [30,22,70,22,75,72,63,85,37,85,25,72],
+        [33,26,67,26,71,70,61,81,39,81,29,70], [33,26,67,26]);
+      polygon(c, [50,12,60,26,60,70,40,70,40,26], "#506068", LIGHT);
+      polygon(c, [50,14,57,26,43,26], "#9f4842");
+      rect(c, 40, 44, 20, 3, COPPER); rect(c, 40, 62, 20, 4, DARK);
+      line(c, [50,28,50,60], "#8c999b", 1);
+      bolt(c, 33, 76); bolt(c, 67, 76);
+    },
+    liuxing: function (c) {
+      foot(c, 30, 79, 40);
+      trunnion(c, 16, 56, 68);
+      plate(c, [22,20,78,20,82,72,68,85,32,85,18,72],
+        [25,24,75,24,78,70,66,81,34,81,22,70], [25,24,75,24]);
+      for (let row = 0; row < 4; row++)
+        for (let col = 0; col < 4; col++) {
+          const x = 29 + col * 11, y = 27 + row * 12;
+          disc(c, x + 4.5, y + 4.5, 4.4, "#111b21");
+          disc(c, x + 4.5, y + 4.5, 2.4, (row + col) % 3 ? "#506068" : COPPER);
+        }
+      rect(c, 28, 75, 44, 2, LIGHT);
     }
   };
 
+  // Later weapons reuse the miniature of their closest relative.
+  const ALIAS = {
+    chuandun: "pojun", zhuihunxia: "zhuihun", tianhuo: "liuxing", fenhun: "zhuihun",
+    mieshi: "pojun", jiuxiao: "zhuihun", wanjian: "liuxing",
+    tianfa: "fuling", xingbao: "leiting", ziwei: "lihuo",
+  };
   function draw(ctx, weapon, x, y, width, height, options) {
-    const id = typeof weapon === "string" ? weapon : weapon && weapon.id;
+    const raw = typeof weapon === "string" ? weapon : weapon && weapon.id;
+    const id = painters[raw] ? raw : ALIAS[raw];
     if (!ctx || !painters[id] || ![x,y,width,height].every(Number.isFinite) || width <= 0 || height <= 0) return false;
     const scale = Math.min(width, height) / 100;
     ctx.save();

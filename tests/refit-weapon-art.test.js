@@ -18,7 +18,8 @@ function context() {
   return c;
 }
 
-const ids = ["chuanyun", "suixing", "bengshan", "zhenhai", "lihuo", "fuling", "zhaoyao", "zhuihun"];
+const ids = ["chuanyun", "suixing", "bengshan", "zhenhai", "lihuo", "fuling", "zhaoyao", "zhuihun",
+  "poyue", "liexing", "tiansan", "guanri", "bailei", "leiting", "yingguang", "dingshen", "pojun", "liuxing"];
 const geometry = new Set();
 for (const id of ids) {
   for (const [width, height] of [[72,58], [130,110]]) {
@@ -50,4 +51,4 @@ const broken = context();
 broken.fill = () => { throw new Error("renderer failure"); };
 assert.throws(() => art.draw(broken, "chuanyun", 0, 0, 72, 58), /renderer failure/);
 assert.equal(broken.depth(), 0, "Canvas state must restore even if rendering throws");
-console.log("refit-weapon-art: 8 distinct renderers, both display sizes, geometry and state checks passed");
+console.log("refit-weapon-art: 18 distinct renderers, both display sizes, geometry and state checks passed");
